@@ -8,21 +8,13 @@
 #include <locale>
 #include <string>
 
+#include "logging.h"
+
 using Microsoft::WRL::ComPtr;
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-static std::string WideToUtf8(const std::wstring& w) {
-  if (w.empty()) return {};
-  int size = WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(),
-                                 nullptr, 0, nullptr, nullptr);
-  std::string s(size, '\0');
-  WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(),
-                      s.data(), size, nullptr, nullptr);
-  return s;
-}
 
 static std::wstring Utf8ToWide(const std::string& s) {
   if (s.empty()) return {};
@@ -39,18 +31,29 @@ static std::wstring Utf8ToWide(const std::string& s) {
 // ---------------------------------------------------------------------------
 
 std::vector<DeviceInfo> DeviceEnumerator::EnumerateVideoDevices() {
+  DebugLog("DeviceEnumerator::EnumerateVideoDevices start");
   std::vector<DeviceInfo> result;
 
   ComPtr<IMFAttributes> attrs;
-  if (FAILED(MFCreateAttributes(&attrs, 1))) return result;
+  if (FAILED(MFCreateAttributes(&attrs, 1))) {
+    DebugLog("DeviceEnumerator::EnumerateVideoDevices MFCreateAttributes failed");
+    return result;
+  }
   if (FAILED(attrs->SetGUID(MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE,
                             MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID))) {
+    DebugLog("DeviceEnumerator::EnumerateVideoDevices SetGUID failed");
     return result;
   }
 
   IMFActivate** devices = nullptr;
   UINT32 count = 0;
-  if (FAILED(MFEnumDeviceSources(attrs.Get(), &devices, &count))) return result;
+  if (FAILED(MFEnumDeviceSources(attrs.Get(), &devices, &count))) {
+    DebugLog("DeviceEnumerator::EnumerateVideoDevices MFEnumDeviceSources failed");
+    return result;
+  }
+
+  DebugLog("DeviceEnumerator::EnumerateVideoDevices found " +
+           std::to_string(count) + " device(s)");
 
   for (UINT32 i = 0; i < count; ++i) {
     WCHAR* friendly_name = nullptr;
@@ -66,6 +69,15 @@ std::vector<DeviceInfo> DeviceEnumerator::EnumerateVideoDevices() {
 
     if (friendly_name && symbolic_link) {
       result.push_back({friendly_name, symbolic_link});
+      DebugLog("DeviceEnumerator: device[" + std::to_string(i) + "] name=" +
+               WideToUtf8(friendly_name) +
+               " symlink=" + WideToUtf8(symbolic_link));
+    } else {
+      DebugLog("DeviceEnumerator: device[" + std::to_string(i) +
+               "] skipped (missing friendly_name=" +
+               std::string(friendly_name ? "ok" : "null") +
+               " or symbolic_link=" +
+               std::string(symbolic_link ? "ok" : "null") + ")");
     }
 
     if (friendly_name) CoTaskMemFree(friendly_name);
@@ -74,6 +86,8 @@ std::vector<DeviceInfo> DeviceEnumerator::EnumerateVideoDevices() {
   }
 
   CoTaskMemFree(devices);
+  DebugLog("DeviceEnumerator::EnumerateVideoDevices returning " +
+           std::to_string(result.size()) + " valid device(s)");
   return result;
 }
 

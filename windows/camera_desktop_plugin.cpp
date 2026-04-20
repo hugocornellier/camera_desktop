@@ -14,6 +14,7 @@
 #include <cstdint>
 
 #include "device_enumerator.h"
+#include "logging.h"
 
 CameraDesktopPlugin* CameraDesktopPlugin::instance_ = nullptr;
 
@@ -132,6 +133,7 @@ void CameraDesktopPlugin::HandleMethodCall(
 
 void CameraDesktopPlugin::HandleAvailableCameras(
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+  DebugLog("HandleAvailableCameras: enumerating video devices");
   auto* raw_result = result.release();
   std::thread([raw_result]() {
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
@@ -139,6 +141,8 @@ void CameraDesktopPlugin::HandleAvailableCameras(
         raw_result);
 
     auto devices = DeviceEnumerator::EnumerateVideoDevices();
+    DebugLog("HandleAvailableCameras: returning " +
+             std::to_string(devices.size()) + " camera(s)");
 
     flutter::EncodableList list;
     for (const auto& device : devices) {
@@ -245,8 +249,15 @@ void CameraDesktopPlugin::HandleCreate(
   }
   if (audio_bitrate < 0) audio_bitrate = 0;
 
+  DebugLog("HandleCreate: camera_name=" + *camera_name +
+           " preset=" + std::to_string(resolution_preset) +
+           " audio=" + std::string(enable_audio ? "yes" : "no") +
+           " fps=" + std::to_string(target_fps) +
+           " bitrate=" + std::to_string(target_bitrate));
+
   std::wstring symbolic_link = DeviceEnumerator::FindSymbolicLink(*camera_name);
   if (symbolic_link.empty()) {
+    DebugLog("HandleCreate: symbolic link not found for camera: " + *camera_name);
     result->Error("camera_not_found",
                   "Could not find camera: " + *camera_name);
     return;
@@ -261,6 +272,7 @@ void CameraDesktopPlugin::HandleCreate(
   config.audio_bitrate = audio_bitrate;
 
   int camera_id = next_camera_id_++;
+  DebugLog("HandleCreate: assigning camera_id=" + std::to_string(camera_id));
   auto camera = std::make_shared<Camera>(
       camera_id,
       registrar_->texture_registrar(),
@@ -269,10 +281,14 @@ void CameraDesktopPlugin::HandleCreate(
 
   int64_t texture_id = camera->RegisterTexture();
   if (texture_id < 0) {
+    DebugLog("HandleCreate: texture registration failed for camera_id=" +
+             std::to_string(camera_id));
     result->Error("texture_registration_failed",
                   "Failed to register Flutter texture");
     return;
   }
+  DebugLog("HandleCreate: texture_id=" + std::to_string(texture_id) +
+           " registered for camera_id=" + std::to_string(camera_id));
 
   {
     std::lock_guard<std::mutex> lk(cameras_mutex_);
@@ -423,6 +439,8 @@ void CameraDesktopPlugin::HandleDispose(
   auto it = args.find(flutter::EncodableValue("cameraId"));
   if (it != args.end()) {
     int camera_id = std::get<int>(it->second);
+    DebugLog("HandleDispose: dispose requested for camera_id=" +
+             std::to_string(camera_id));
     std::shared_ptr<Camera> camera;
     {
       std::lock_guard<std::mutex> lk(cameras_mutex_);
@@ -434,11 +452,16 @@ void CameraDesktopPlugin::HandleDispose(
     if (camera) {
       camera_desktop_ffi_release_handles_for_camera(camera.get());
       camera->DisposeAsync([camera_id]() {
+        DebugLog("HandleDispose: async dispose complete for camera_id=" +
+                 std::to_string(camera_id));
         auto* plugin = CameraDesktopPlugin::instance();
         if (plugin) {
           plugin->EraseCameraAfterDispose(camera_id);
         }
       });
+    } else {
+      DebugLog("HandleDispose: camera_id=" + std::to_string(camera_id) +
+               " not found (already disposed?)");
     }
   }
   result->Success(flutter::EncodableValue(nullptr));

@@ -1,6 +1,9 @@
 #include "camera_texture.h"
 
 #include <cstring>
+#include <string>
+
+#include "logging.h"
 
 CameraTexture::CameraTexture(flutter::TextureRegistrar* registrar)
     : registrar_(registrar) {}
@@ -16,6 +19,11 @@ int64_t CameraTexture::Register() {
             return ObtainPixelBuffer(w, h);
           }));
   texture_id_ = registrar_->RegisterTexture(texture_variant_.get());
+  if (texture_id_ >= 0) {
+    DebugLog("CameraTexture::Register: texture_id=" + std::to_string(texture_id_));
+  } else {
+    DebugLog("CameraTexture::Register: RegisterTexture failed (texture_id=" + std::to_string(texture_id_) + ")");
+  }
   return texture_id_;
 }
 
@@ -73,6 +81,7 @@ const FlutterDesktopPixelBuffer* CameraTexture::ObtainPixelBuffer(
 
 void CameraTexture::Unregister() {
   if (texture_id_ >= 0 && registrar_) {
+    DebugLog("CameraTexture::Unregister: texture_id=" + std::to_string(texture_id_));
     registrar_->UnregisterTexture(texture_id_);
     texture_id_ = -1;
   }

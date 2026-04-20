@@ -79,4 +79,81 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-      - run: cd example && flutter build windows
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Verify /utf-8 is set for MSVC in windows/CMakeLists.txt
+        shell: bash
+        run: |
+          grep -q '/utf-8' windows/CMakeLists.txt \
+            || { echo "::error::windows/CMakeLists.txt is missing /utf-8 — see chinese-pc-compat.md"; exit 1; }
+
+      - name: Verify ci/cp936_repro.cpp covers every non-ASCII char in windows/
+        shell: bash
+        run: python ci/check_unicode_inventory.py
+
+      - name: Verify ci/cp936_repro.cpp has no UTF-8 BOM
+        shell: bash
+        run: |
+          bom=$(head -c 3 ci/cp936_repro.cpp | od -An -tx1 | tr -d ' \n')
+          if [ "$bom" = "efbbbf" ]; then
+            echo "::error::ci/cp936_repro.cpp must not have a BOM (MSVC would auto-detect UTF-8 and bypass /source-charset:.936)"
+            exit 1
+          fi
+          echo "OK: no BOM"
+
+      - name: CP936 simulation without /utf-8 must fail with C4819/C2220
+        shell: cmd
+        run: |
+          cl /c /WX /source-charset:.936 /execution-charset:.936 /nologo ci\cp936_repro.cpp > cl.log 2>&1
+          set CL_EXIT=%errorlevel%
+          type cl.log
+          if %CL_EXIT% equ 0 (
+            echo ::error::Expected C4819/C2220 but compile succeeded — CP936 simulation is not triggering the bug
+            exit /b 1
+          )
+          findstr /c:"C4819" cl.log >nul
+          if errorlevel 1 (
+            echo ::error::cl.exe failed but did not emit C4819 — test is not reproducing the real bug
+            exit /b 1
+          )
+          findstr /c:"C2220" cl.log >nul
+          if errorlevel 1 (
+            echo ::error::cl.exe failed but did not emit C2220 — /WX promotion is not working as expected
+            exit /b 1
+          )
+          echo OK: CP936 simulation reproduced C4819/C2220 as expected
+          exit /b 0
+
+      # Note: MSVC refuses `/source-charset:.936` together with `/utf-8`
+      # (error D8016: options are incompatible). On a real Chinese Windows
+      # host, CP936 is NOT a flag — it's an implicit default from GetACP().
+      # `/utf-8` overrides that implicit default. We prove the fix in two
+      # independent invocations: the previous step shows CP936 is hostile
+      # to our bytes; this step shows `/utf-8` makes MSVC read them as UTF-8
+      # and compile cleanly with /WX. Together they imply that on a real
+      # CP936 host, adding `/utf-8` switches MSVC from CP936-mode (fail)
+      # to UTF-8-mode (pass).
+      - name: Compile with /utf-8 must succeed (proves /utf-8 resolves our chars)
+        shell: cmd
+        run: cl /c /WX /utf-8 /nologo ci\cp936_repro.cpp
+
+      - name: Build the example (generates the plugin vcxproj)
+        run: cd example && flutter build windows
+
+      - name: Verify /utf-8 is threaded into the generated plugin vcxproj
+        shell: bash
+        run: |
+          vcxproj=$(find example/build/windows -name 'camera_desktop_plugin.vcxproj' | head -n1)
+          if [ -z "$vcxproj" ]; then
+            echo "::error::camera_desktop_plugin.vcxproj not found under example/build/windows"
+            find example/build/windows -name '*.vcxproj' || true
+            exit 1
+          fi
+          echo "Inspecting: $vcxproj"
+          if ! grep -q '/utf-8' "$vcxproj"; then
+            echo "::error::/utf-8 missing from $vcxproj — CMake did not thread the flag through"
+            echo "--- vcxproj contents ---"
+            cat "$vcxproj"
+            exit 1
+          fi
+          echo "OK: /utf-8 present in $vcxproj"

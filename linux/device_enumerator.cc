@@ -1,6 +1,7 @@
 #include "device_enumerator.h"
 
 #include <fcntl.h>
+#include <glib.h>
 #include <linux/videodev2.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
@@ -71,13 +72,17 @@ static int QueryMaxFps(int fd, __u32 pixel_format, int width, int height) {
 std::vector<DeviceInfo> DeviceEnumerator::EnumerateDevices() {
   std::vector<DeviceInfo> devices;
   std::set<std::string> seen_bus_info;
+  int open_failures = 0;
 
   for (int i = 0; i < kMaxDeviceIndex; i++) {
     char path[32];
     snprintf(path, sizeof(path), "/dev/video%d", i);
 
     int fd = open(path, O_RDONLY | O_NONBLOCK);
-    if (fd < 0) continue;
+    if (fd < 0) {
+      open_failures++;
+      continue;
+    }
 
     struct v4l2_capability cap;
     memset(&cap, 0, sizeof(cap));
@@ -127,6 +132,14 @@ std::vector<DeviceInfo> DeviceEnumerator::EnumerateDevices() {
 
     close(fd);
   }
+  if (open_failures > 0) {
+    g_info("[camera_desktop] V4L2 enumeration: %d /dev/videoN node(s) could"
+           " not be opened (normal if indices are sparse)", open_failures);
+  }
+  g_info("[camera_desktop] V4L2 enumeration found %zu camera(s)", devices.size());
+  for (const auto& d : devices) {
+    g_info("[camera_desktop]   → %s (%s)", d.name.c_str(), d.device_path.c_str());
+  }
   return devices;
 }
 
@@ -135,7 +148,11 @@ std::vector<ResolutionInfo> DeviceEnumerator::EnumerateResolutions(
   std::vector<ResolutionInfo> resolutions;
 
   int fd = open(device_path.c_str(), O_RDONLY | O_NONBLOCK);
-  if (fd < 0) return resolutions;
+  if (fd < 0) {
+    g_info("[camera_desktop] EnumerateResolutions: failed to open %s",
+           device_path.c_str());
+    return resolutions;
+  }
 
   struct v4l2_fmtdesc fmt;
   memset(&fmt, 0, sizeof(fmt));
@@ -192,6 +209,9 @@ std::vector<ResolutionInfo> DeviceEnumerator::EnumerateResolutions(
               return a.width > b.width;
             });
 
+  g_info("[camera_desktop] Device %s: %zu resolution(s) available",
+         device_path.c_str(), resolutions.size());
+
   return resolutions;
 }
 
@@ -204,19 +224,28 @@ ResolutionInfo DeviceEnumerator::SelectResolution(
   // has at least kMinFps. Resolutions are sorted descending.
   for (const auto& r : resolutions) {
     if (r.height <= max_height && r.max_fps >= kMinFps) {
+      g_info("[camera_desktop] SelectResolution(preset=%d): primary match"
+             " %dx%d@%dfps", preset, r.width, r.height, r.max_fps);
       return r;
     }
   }
   // Fallback: relax FPS requirement.
   for (const auto& r : resolutions) {
     if (r.height <= max_height) {
+      g_info("[camera_desktop] SelectResolution(preset=%d): relaxed-FPS"
+             " fallback %dx%d@%dfps", preset, r.width, r.height, r.max_fps);
       return r;
     }
   }
   // Absolute fallback: return the lowest resolution available.
   if (!resolutions.empty()) {
-    return resolutions.back();
+    const auto& r = resolutions.back();
+    g_info("[camera_desktop] SelectResolution(preset=%d): lowest-available"
+           " fallback %dx%d@%dfps", preset, r.width, r.height, r.max_fps);
+    return r;
   }
   // No resolutions found, return a default and let GStreamer negotiate.
+  g_info("[camera_desktop] SelectResolution(preset=%d): no resolutions"
+         " available, using hardcoded default 640x480@30fps", preset);
   return {640, 480, 30};
 }
