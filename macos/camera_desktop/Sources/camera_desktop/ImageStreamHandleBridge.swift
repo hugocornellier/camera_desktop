@@ -47,6 +47,7 @@ final class ImageStreamHandleBridge {
         nextHandle += 1
         sessionsByHandle[handle] = WeakCameraSession(session)
         cameraIdByHandle[handle] = session.cameraId
+        print("[camera_desktop] ImageStreamHandleBridge.registerSession: cameraId=\(session.cameraId) handle=\(handle)")
         return handle
     }
 
@@ -56,6 +57,7 @@ final class ImageStreamHandleBridge {
         sessionsByHandle.removeValue(forKey: handle)
         cameraIdByHandle.removeValue(forKey: handle)
         lock.unlock()
+        print("[camera_desktop] ImageStreamHandleBridge.releaseHandle: handle=\(handle)")
     }
 
     static func releaseHandles(forCameraId cameraId: Int) {
@@ -63,6 +65,9 @@ final class ImageStreamHandleBridge {
         defer { lock.unlock() }
         let handlesToRemove = cameraIdByHandle.compactMap { entry in
             entry.value == cameraId ? entry.key : nil
+        }
+        if !handlesToRemove.isEmpty {
+            print("[camera_desktop] ImageStreamHandleBridge.releaseHandles: releasing \(handlesToRemove.count) handle(s) for cameraId=\(cameraId)")
         }
         for handle in handlesToRemove {
             sessionsByHandle.removeValue(forKey: handle)
@@ -72,10 +77,14 @@ final class ImageStreamHandleBridge {
 
     static func getImageStreamBuffer(forHandle handle: Int64) -> UnsafeMutableRawPointer? {
         lock.lock()
-        let session = sessionsByHandle[handle]?.value
-        if session == nil {
+        let wrapper = sessionsByHandle[handle]
+        let session = wrapper?.value
+        if wrapper != nil && session == nil {
+            print("[camera_desktop] ImageStreamHandleBridge.getImageStreamBuffer: stale handle \(handle) — session was deallocated, cleaning up")
             sessionsByHandle.removeValue(forKey: handle)
             cameraIdByHandle.removeValue(forKey: handle)
+        } else if wrapper == nil && handle != 0 {
+            print("[camera_desktop] ImageStreamHandleBridge.getImageStreamBuffer: unknown handle \(handle)")
         }
         lock.unlock()
         return session?.getImageStreamBufferPointer()
@@ -86,8 +95,10 @@ final class ImageStreamHandleBridge {
         forHandle handle: Int64
     ) {
         lock.lock()
-        let session = sessionsByHandle[handle]?.value
-        if session == nil {
+        let wrapper = sessionsByHandle[handle]
+        let session = wrapper?.value
+        if wrapper != nil && session == nil {
+            print("[camera_desktop] ImageStreamHandleBridge.registerImageStreamCallback: stale handle \(handle) — session was deallocated, cleaning up")
             sessionsByHandle.removeValue(forKey: handle)
             cameraIdByHandle.removeValue(forKey: handle)
         }
@@ -97,8 +108,10 @@ final class ImageStreamHandleBridge {
 
     static func unregisterImageStreamCallback(forHandle handle: Int64) {
         lock.lock()
-        let session = sessionsByHandle[handle]?.value
-        if session == nil {
+        let wrapper = sessionsByHandle[handle]
+        let session = wrapper?.value
+        if wrapper != nil && session == nil {
+            print("[camera_desktop] ImageStreamHandleBridge.unregisterImageStreamCallback: stale handle \(handle) — session was deallocated, cleaning up")
             sessionsByHandle.removeValue(forKey: handle)
             cameraIdByHandle.removeValue(forKey: handle)
         }

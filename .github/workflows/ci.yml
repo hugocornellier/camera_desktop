@@ -79,4 +79,9 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+      - name: Verify /utf-8 is set for MSVC
+        shell: bash
+        run: |
+          grep -q '/utf-8' windows/CMakeLists.txt \
+            || { echo "::error::windows/CMakeLists.txt is missing /utf-8 — see chinese-pc-compat.md"; exit 1; }
       - run: cd example && flutter build windows

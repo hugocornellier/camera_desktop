@@ -51,7 +51,13 @@ bool PipeWirePortal::HasPipeWireSrc() {
 }
 
 bool PipeWirePortal::ShouldUsePipeWire() {
-  return IsFlatpak() && HasPipeWireSrc();
+  bool flatpak = IsFlatpak();
+  bool has_pw = flatpak ? HasPipeWireSrc() : false;
+  g_info("[camera_desktop] Flatpak detected: %s, pipewiresrc available: %s → %s",
+         flatpak ? "yes" : "no",
+         has_pw ? "yes" : "no",
+         (flatpak && has_pw) ? "PipeWire backend" : "V4L2 backend");
+  return flatpak && has_pw;
 }
 
 std::vector<ResolutionInfo> PipeWirePortal::GetDefaultResolutions() {
@@ -82,6 +88,7 @@ void PipeWirePortal::EnumerateDevicesAsync(EnumerateCallback callback) {
   // If we already have a valid PipeWire fd from a previous call, skip the
   // portal permission flow and go straight to enumeration.
   if (pw_fd_ >= 0) {
+    g_info("[camera_desktop] PipeWirePortal: reusing cached pw_fd=%d", pw_fd_);
     EnumeratePipeWireNodes();
     return;
   }
@@ -93,6 +100,8 @@ void PipeWirePortal::EnumerateDevicesAsync(EnumerateCallback callback) {
   // where <sender> is the unique bus name with ':' removed and '.' -> '_'.
   const gchar* unique_name = g_dbus_connection_get_unique_name(connection_);
   if (!unique_name) {
+    g_info("[camera_desktop] PipeWirePortal: D-Bus unique name is null,"
+           " cannot build request path");
     FinishWithFallback();
     return;
   }
@@ -261,6 +270,8 @@ void PipeWirePortal::OpenPipeWireRemote() {
     return;
   }
 
+  g_info("[camera_desktop] Portal: camera access granted, pw_fd=%d", pw_fd_);
+
   // We have the PipeWire remote fd. Enumerate camera nodes.
   EnumeratePipeWireNodes();
 }
@@ -288,6 +299,8 @@ void PipeWirePortal::EnumeratePipeWireNodes() {
     GstDevice* dev = GST_DEVICE(l->data);
     GstStructure* props = gst_device_get_properties(dev);
     if (!props) {
+      g_info("[camera_desktop] PipeWirePortal: device has no properties,"
+             " skipping");
       gst_object_unref(dev);
       continue;
     }
@@ -305,6 +318,9 @@ void PipeWirePortal::EnumeratePipeWireNodes() {
       info.device_path = std::string("pw:") + node_id_str;
     } else {
       // Fallback: use a serial number as identifier.
+      g_info("[camera_desktop] PipeWirePortal: node.id/object.id not found"
+             " for device '%s', using auto fallback id",
+             display_name ? display_name : "(unknown)");
       static int fallback_id = 0;
       char fallback[32];
       snprintf(fallback, sizeof(fallback), "pw:auto%d", fallback_id++);
@@ -324,6 +340,11 @@ void PipeWirePortal::EnumeratePipeWireNodes() {
   g_list_free(gst_devices);
   gst_object_unref(monitor);
 
+  g_info("[camera_desktop] PipeWire enumeration found %zu camera(s)", devices.size());
+  for (const auto& d : devices) {
+    g_info("[camera_desktop]   → %s (%s)", d.name.c_str(), d.device_path.c_str());
+  }
+
   if (pending_callback_) {
     auto cb = std::move(pending_callback_);
     pending_callback_ = nullptr;
@@ -332,6 +353,7 @@ void PipeWirePortal::EnumeratePipeWireNodes() {
 }
 
 void PipeWirePortal::FinishWithFallback() {
+  g_info("[camera_desktop] PipeWire path unavailable, falling back to V4L2");
   if (pending_callback_) {
     auto cb = std::move(pending_callback_);
     pending_callback_ = nullptr;

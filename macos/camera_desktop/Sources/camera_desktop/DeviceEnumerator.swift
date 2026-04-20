@@ -38,7 +38,12 @@ class DeviceEnumerator {
             return aScore < bScore
         }
 
-        return sorted.map { $0.1 }
+        let result = sorted.map { $0.1 }
+        print("[camera_desktop] Device enumeration found \(result.count) camera(s)")
+        for (device, _) in sorted {
+            print("[camera_desktop]   → \(device.localizedName) (uniqueID=\(device.uniqueID), position=\(device.position.rawValue))")
+        }
+        return result
     }
 
     /// Returns a sort score for camera ordering.

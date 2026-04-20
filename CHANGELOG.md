@@ -1,3 +1,17 @@
+## 1.1.3
+
+* Fix Windows build failure (C4819 / C2220) on hosts with a non-UTF-8 system code page (e.g. CP936 on Simplified Chinese Windows) by compiling the plugin with `/utf-8` under MSVC (#2)
+
+## 1.1.2
+
+* Fix macOS build failure on Xcode 26+ by removing unavailable `AVCaptureSessionInterruptionReasonKey` (re-introduced in 1.1.1)
+* Fix Windows build failure caused by implicit `wchar_t` to `char` conversion in debug logging
+
+## 1.1.1
+
+* Add comprehensive diagnostic logging across all platforms (Linux, macOS, Windows)
+* Log device enumeration, backend selection, pipeline construction, resolution selection, recording lifecycle, and error paths
+
 ## 1.1.0
 
 * Add PipeWire camera portal support for Flatpak sandbox compatibility on Linux

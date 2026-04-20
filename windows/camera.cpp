@@ -102,26 +102,48 @@ bool FindBestMediaType(DWORD stream_index, IMFCaptureSource* source,
                        uint32_t* out_width, uint32_t* out_height,
                        float* out_fps = nullptr,
                        float min_framerate = 15.0f) {
+  DebugLog("FindBestMediaType: stream=" + std::to_string(stream_index) +
+           " max_height=" + std::to_string(max_height) +
+           " min_fps=" + std::to_string(static_cast<int>(min_framerate)));
+
   ComPtr<IMFMediaType> best;
   uint32_t best_w = 0, best_h = 0;
   float best_fps = 0.0f;
+  int examined = 0;
 
   for (int i = 0;; ++i) {
     ComPtr<IMFMediaType> type;
     if (FAILED(source->GetAvailableDeviceMediaType(stream_index, i, &type)))
       break;
+    ++examined;
 
     UINT32 num = 0, den = 1;
     if (FAILED(MFGetAttributeRatio(type.Get(), MF_MT_FRAME_RATE, &num, &den)) ||
-        den == 0)
+        den == 0) {
+      DebugLog("FindBestMediaType: type[" + std::to_string(i) +
+               "] rejected (no frame rate attribute)");
       continue;
+    }
     float fps = static_cast<float>(num) / static_cast<float>(den);
-    if (fps < min_framerate) continue;
+    if (fps < min_framerate) {
+      DebugLog("FindBestMediaType: type[" + std::to_string(i) +
+               "] rejected (fps=" + std::to_string(fps) +
+               " < min=" + std::to_string(min_framerate) + ")");
+      continue;
+    }
 
     UINT32 w = 0, h = 0;
-    if (FAILED(MFGetAttributeSize(type.Get(), MF_MT_FRAME_SIZE, &w, &h)))
+    if (FAILED(MFGetAttributeSize(type.Get(), MF_MT_FRAME_SIZE, &w, &h))) {
+      DebugLog("FindBestMediaType: type[" + std::to_string(i) +
+               "] rejected (no frame size attribute)");
       continue;
-    if (h > max_height) continue;
+    }
+    if (h > max_height) {
+      DebugLog("FindBestMediaType: type[" + std::to_string(i) + "] " +
+               std::to_string(w) + "x" + std::to_string(h) +
+               " rejected (height > max " + std::to_string(max_height) + ")");
+      continue;
+    }
 
     if (w > best_w || h > best_h || (w == best_w && h == best_h && fps > best_fps)) {
       type.CopyTo(&best);
@@ -130,6 +152,12 @@ bool FindBestMediaType(DWORD stream_index, IMFCaptureSource* source,
       best_fps = fps;
     }
   }
+
+  DebugLog("FindBestMediaType: examined " + std::to_string(examined) +
+           " type(s), best=" +
+           (best ? std::to_string(best_w) + "x" + std::to_string(best_h) +
+                       "@" + std::to_string(static_cast<int>(best_fps + 0.5f)) + "fps"
+                 : "none"));
 
   if (!best) return false;
   best.CopyTo(out_type);
@@ -146,6 +174,18 @@ std::string WstrToUtf8(const std::wstring& w) {
   std::string s(n - 1, '\0');
   WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, s.data(), n, nullptr, nullptr);
   return s;
+}
+
+std::string CameraStateStr(CameraState s) {
+  switch (s) {
+    case CameraState::kCreated:      return "kCreated";
+    case CameraState::kInitializing: return "kInitializing";
+    case CameraState::kRunning:      return "kRunning";
+    case CameraState::kPaused:       return "kPaused";
+    case CameraState::kDisposing:    return "kDisposing";
+    case CameraState::kDisposed:     return "kDisposed";
+    default:                         return "kUnknown";
+  }
 }
 
 }  // namespace
@@ -225,21 +265,24 @@ HRESULT Camera::CreateCaptureEngine() {
   HRESULT hr = CoCreateInstance(CLSID_MFCaptureEngineClassFactory, nullptr,
                                 CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory));
   if (FAILED(hr)) {
-    DebugLog("CreateCaptureEngine: CoCreateInstance factory failed " + std::to_string(hr));
+    DebugLog("CreateCaptureEngine: CoCreateInstance factory failed " + HrToString(hr));
     return hr;
   }
 
   hr = factory->CreateInstance(CLSID_MFCaptureEngine,
                                IID_PPV_ARGS(&capture_engine_));
   if (FAILED(hr)) {
-    DebugLog("CreateCaptureEngine: CreateInstance engine failed " + std::to_string(hr));
+    DebugLog("CreateCaptureEngine: CreateInstance engine failed " + HrToString(hr));
     return hr;
   }
 
   // Build initialisation attributes.
   ComPtr<IMFAttributes> attrs;
   hr = MFCreateAttributes(&attrs, 3);
-  if (FAILED(hr)) return hr;
+  if (FAILED(hr)) {
+    DebugLog("CreateCaptureEngine: MFCreateAttributes (attrs) failed " + HrToString(hr));
+    return hr;
+  }
 
   // D3D11 hardware acceleration, best-effort.
   {
@@ -253,8 +296,15 @@ HRESULT Camera::CreateCaptureEngine() {
 
       UINT token = 0;
       ComPtr<IMFDXGIDeviceManager> mgr;
-      if (SUCCEEDED(MFCreateDXGIDeviceManager(&token, &mgr)) &&
-          SUCCEEDED(mgr->ResetDevice(dx11_device_.Get(), token))) {
+      HRESULT mgr_hr = MFCreateDXGIDeviceManager(&token, &mgr);
+      if (FAILED(mgr_hr)) {
+        DebugLog("CreateCaptureEngine: MFCreateDXGIDeviceManager failed " + HrToString(mgr_hr));
+      }
+      HRESULT reset_hr = FAILED(mgr_hr) ? mgr_hr : mgr->ResetDevice(dx11_device_.Get(), token);
+      if (SUCCEEDED(mgr_hr) && FAILED(reset_hr)) {
+        DebugLog("CreateCaptureEngine: ResetDevice failed " + HrToString(reset_hr));
+      }
+      if (SUCCEEDED(mgr_hr) && SUCCEEDED(reset_hr)) {
         dxgi_device_manager_  = mgr;
         dx_device_reset_token_ = token;
         attrs->SetUnknown(MF_CAPTURE_ENGINE_D3D_MANAGER,
@@ -262,7 +312,7 @@ HRESULT Camera::CreateCaptureEngine() {
         DebugLog("CreateCaptureEngine: D3D11 DXGI manager created");
       }
     } else {
-      DebugLog("CreateCaptureEngine: D3D11 not available, using software path");
+      DebugLog("CreateCaptureEngine: D3D11CreateDevice failed " + HrToString(d3d_hr) + ", using software path");
     }
   }
 
@@ -273,7 +323,10 @@ HRESULT Camera::CreateCaptureEngine() {
   // Video device source.
   ComPtr<IMFAttributes> vid_attrs;
   hr = MFCreateAttributes(&vid_attrs, 2);
-  if (FAILED(hr)) return hr;
+  if (FAILED(hr)) {
+    DebugLog("CreateCaptureEngine: MFCreateAttributes (vid_attrs) failed " + HrToString(hr));
+    return hr;
+  }
   hr = vid_attrs->SetGUID(MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE,
                           MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID);
   if (FAILED(hr)) return hr;
@@ -285,13 +338,14 @@ HRESULT Camera::CreateCaptureEngine() {
   ComPtr<IMFMediaSource> video_source;
   hr = MFCreateDeviceSource(vid_attrs.Get(), &video_source);
   if (FAILED(hr)) {
-    DebugLog("CreateCaptureEngine: MFCreateDeviceSource video failed " + std::to_string(hr));
+    DebugLog("CreateCaptureEngine: MFCreateDeviceSource video failed " + HrToString(hr));
     return hr;
   }
 
   // Audio device source, best-effort (non-fatal).
   ComPtr<IMFMediaSource> audio_source;
   if (config_.enable_audio) {
+    DebugLog("CreateCaptureEngine: enumerating audio devices");
     ComPtr<IMFAttributes> aud_enum_attrs;
     if (SUCCEEDED(MFCreateAttributes(&aud_enum_attrs, 1)) &&
         SUCCEEDED(aud_enum_attrs->SetGUID(
@@ -299,9 +353,26 @@ HRESULT Camera::CreateCaptureEngine() {
             MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_AUDCAP_GUID))) {
       IMFActivate** devices = nullptr;
       UINT32 count = 0;
-      if (SUCCEEDED(MFEnumDeviceSources(aud_enum_attrs.Get(), &devices,
-                                        &count)) &&
-          count > 0) {
+      const bool enum_ok = SUCCEEDED(
+          MFEnumDeviceSources(aud_enum_attrs.Get(), &devices, &count));
+      if (enum_ok) {
+        DebugLog("CreateCaptureEngine: audio enumeration found " +
+                 std::to_string(count) + " device(s)");
+      } else {
+        DebugLog("CreateCaptureEngine: audio MFEnumDeviceSources failed");
+      }
+      if (enum_ok && count > 0) {
+        // Log the friendly name of the first (selected) audio device.
+        WCHAR* audio_name = nullptr;
+        UINT32 audio_name_len = 0;
+        if (SUCCEEDED(devices[0]->GetAllocatedString(
+                MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME,
+                &audio_name, &audio_name_len)) && audio_name) {
+          DebugLog("CreateCaptureEngine: selecting audio device[0]=" +
+                   WstrToUtf8(audio_name));
+          CoTaskMemFree(audio_name);
+        }
+
         LPWSTR ep_id = nullptr;
         UINT32  ep_id_size = 0;
         if (SUCCEEDED(devices[0]->GetAllocatedString(
@@ -315,7 +386,12 @@ HRESULT Camera::CreateCaptureEngine() {
               SUCCEEDED(aud_src_attrs->SetString(
                   MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_AUDCAP_ENDPOINT_ID,
                   ep_id))) {
-            MFCreateDeviceSource(aud_src_attrs.Get(), &audio_source);
+            HRESULT aud_hr =
+                MFCreateDeviceSource(aud_src_attrs.Get(), &audio_source);
+            if (FAILED(aud_hr)) {
+              DebugLog("CreateCaptureEngine: MFCreateDeviceSource audio failed " +
+                       HrToString(aud_hr));
+            }
           }
           CoTaskMemFree(ep_id);
         }
@@ -323,7 +399,9 @@ HRESULT Camera::CreateCaptureEngine() {
         CoTaskMemFree(devices);
       }
     }
-    if (!audio_source) {
+    if (audio_source) {
+      DebugLog("CreateCaptureEngine: audio source acquired successfully");
+    } else {
       DebugLog("CreateCaptureEngine: audio source unavailable, continuing without audio");
     }
   }
@@ -336,7 +414,9 @@ HRESULT Camera::CreateCaptureEngine() {
   hr = capture_engine_->Initialize(event_cb.Get(), attrs.Get(),
                                    audio_source.Get(), video_source.Get());
   if (FAILED(hr)) {
-    DebugLog("CreateCaptureEngine: Initialize failed " + std::to_string(hr));
+    DebugLog("CreateCaptureEngine: Initialize failed " + HrToString(hr));
+  } else {
+    DebugLog("CreateCaptureEngine: Initialize called successfully (async, awaiting INITIALIZED event)");
   }
   return hr;
 }
@@ -348,9 +428,15 @@ HRESULT Camera::CreateCaptureEngine() {
 HRESULT Camera::FindBaseMediaTypes() {
   ComPtr<IMFCaptureSource> source;
   HRESULT hr = capture_engine_->GetSource(&source);
-  if (FAILED(hr)) return hr;
+  if (FAILED(hr)) {
+    DebugLog("FindBaseMediaTypes: GetSource failed " + HrToString(hr));
+    return hr;
+  }
 
   uint32_t max_h = MaxPreviewHeightForPreset();
+  DebugLog("FindBaseMediaTypes: preset=" + std::to_string(config_.resolution_preset) +
+           " max_height=" + std::to_string(max_h) +
+           " target_fps=" + std::to_string(config_.target_fps));
   uint32_t pw = 0, ph = 0;
 
   if (!FindBestMediaType(
@@ -375,6 +461,8 @@ HRESULT Camera::FindBaseMediaTypes() {
 
   if (!found_record) {
     // Fallback to a permissive minimum to keep devices with sparse modes usable.
+    DebugLog("FindBaseMediaTypes: first FindBestMediaType (record) failed for fps=" +
+             std::to_string(requested_fps) + ", retrying with min_fps=5.0");
     found_record = FindBestMediaType(
         (DWORD)MF_CAPTURE_ENGINE_PREFERRED_SOURCE_STREAM_FOR_VIDEO_RECORD,
         source.Get(), &base_capture_media_type_, max_record_h, &rw, &rh, &rfps,
@@ -406,24 +494,42 @@ HRESULT Camera::StartPreviewInternal() {
   ComPtr<IMFCaptureSink> sink;
   HRESULT hr =
       capture_engine_->GetSink(MF_CAPTURE_ENGINE_SINK_TYPE_PREVIEW, &sink);
-  if (FAILED(hr)) return hr;
+  if (FAILED(hr)) {
+    DebugLog("StartPreviewInternal: GetSink failed " + HrToString(hr));
+    return hr;
+  }
 
   hr = sink.As(&preview_sink_);
-  if (FAILED(hr)) return hr;
+  if (FAILED(hr)) {
+    DebugLog("StartPreviewInternal: sink.As (preview sink) failed " + HrToString(hr));
+    return hr;
+  }
 
   hr = preview_sink_->RemoveAllStreams();
-  if (FAILED(hr)) return hr;
+  if (FAILED(hr)) {
+    DebugLog("StartPreviewInternal: RemoveAllStreams failed " + HrToString(hr));
+    return hr;
+  }
 
   // Build ARGB32 preview output type from negotiated base type.
   ComPtr<IMFMediaType> preview_type;
   hr = MFCreateMediaType(&preview_type);
-  if (FAILED(hr)) return hr;
+  if (FAILED(hr)) {
+    DebugLog("StartPreviewInternal: MFCreateMediaType failed " + HrToString(hr));
+    return hr;
+  }
 
   hr = base_preview_media_type_->CopyAllItems(preview_type.Get());
-  if (FAILED(hr)) return hr;
+  if (FAILED(hr)) {
+    DebugLog("StartPreviewInternal: CopyAllItems failed " + HrToString(hr));
+    return hr;
+  }
 
   hr = preview_type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_ARGB32);
-  if (FAILED(hr)) return hr;
+  if (FAILED(hr)) {
+    DebugLog("StartPreviewInternal: SetGUID (ARGB32 subtype) failed " + HrToString(hr));
+    return hr;
+  }
 
   preview_type->SetUINT32(MF_MT_ALL_SAMPLES_INDEPENDENT, TRUE);
 
@@ -435,10 +541,16 @@ HRESULT Camera::StartPreviewInternal() {
   hr = preview_sink_->AddStream(
       (DWORD)MF_CAPTURE_ENGINE_PREFERRED_SOURCE_STREAM_FOR_VIDEO_PREVIEW,
       preview_type.Get(), nullptr, &stream_index);
-  if (FAILED(hr)) return hr;
+  if (FAILED(hr)) {
+    DebugLog("StartPreviewInternal: AddStream failed " + HrToString(hr));
+    return hr;
+  }
 
   hr = preview_sink_->SetSampleCallback(stream_index, sample_cb.Get());
-  if (FAILED(hr)) return hr;
+  if (FAILED(hr)) {
+    DebugLog("StartPreviewInternal: SetSampleCallback failed " + HrToString(hr));
+    return hr;
+  }
 
   // Set source device media type, guides resolution selection.
   ComPtr<IMFCaptureSource> source;
@@ -448,12 +560,12 @@ HRESULT Camera::StartPreviewInternal() {
         base_preview_media_type_.Get());
     if (FAILED(set_hr)) {
       DebugLog("StartPreviewInternal: SetCurrentDeviceMediaType failed (non-fatal) " +
-               std::to_string(set_hr));
+               HrToString(set_hr));
     }
   }
 
   hr = capture_engine_->StartPreview();
-  DebugLog("StartPreviewInternal: StartPreview hr=" + std::to_string(hr));
+  DebugLog("StartPreviewInternal: StartPreview hr=" + HrToString(hr));
   return hr;
 }
 
@@ -528,10 +640,17 @@ void Camera::OnEngineEvent(IMFMediaEvent* event) {
   }
 
   GUID event_type = GUID_NULL;
-  if (FAILED(event->GetExtendedType(&event_type))) return;
+  HRESULT get_type_hr = event->GetExtendedType(&event_type);
+  if (FAILED(get_type_hr)) {
+    DebugLog("OnEngineEvent: GetExtendedType failed " + HrToString(get_type_hr));
+    return;
+  }
 
   HRESULT event_hr = S_OK;
-  event->GetStatus(&event_hr);
+  HRESULT get_status_hr = event->GetStatus(&event_hr);
+  if (FAILED(get_status_hr)) {
+    DebugLog("OnEngineEvent: GetStatus failed " + HrToString(get_status_hr));
+  }
 
   // ── Engine error ──────────────────────────────────────────────────────
   if (event_type == MF_CAPTURE_ENGINE_ERROR) {
@@ -578,7 +697,7 @@ void Camera::OnEngineEvent(IMFMediaEvent* event) {
 
   // ── Record started ────────────────────────────────────────────────────
   if (event_type == MF_CAPTURE_ENGINE_RECORD_STARTED) {
-    DebugLog("Camera::OnEngineEvent RECORD_STARTED hr=" + std::to_string(event_hr));
+    DebugLog("Camera::OnEngineEvent RECORD_STARTED hr=" + HrToString(event_hr));
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> r;
     {
       std::lock_guard<std::mutex> lk(pending_mutex_);
@@ -597,7 +716,7 @@ void Camera::OnEngineEvent(IMFMediaEvent* event) {
 
   // ── Record stopped ────────────────────────────────────────────────────
   if (event_type == MF_CAPTURE_ENGINE_RECORD_STOPPED) {
-    DebugLog("Camera::OnEngineEvent RECORD_STOPPED hr=" + std::to_string(event_hr));
+    DebugLog("Camera::OnEngineEvent RECORD_STOPPED hr=" + HrToString(event_hr));
     is_recording_ = false;
 
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> r;
@@ -658,7 +777,10 @@ void Camera::OnPreviewSample(IMFSample* sample) {
 
   // Get a contiguous ARGB32 buffer.
   ComPtr<IMFMediaBuffer> buffer;
-  if (FAILED(sample->ConvertToContiguousBuffer(&buffer))) return;
+  if (FAILED(sample->ConvertToContiguousBuffer(&buffer))) {
+    DebugLog("OnPreviewSample: ConvertToContiguousBuffer failed, dropping frame");
+    return;
+  }
 
   if (packed_frame_.size() != packed_len) packed_frame_.resize(packed_len);
 
@@ -668,8 +790,12 @@ void Camera::OnPreviewSample(IMFSample* sample) {
   ComPtr<IMF2DBuffer> buffer2d;
   BYTE* scan0 = nullptr;
   LONG  pitch  = 0;
-  if (SUCCEEDED(buffer.As(&buffer2d)) &&
-      SUCCEEDED(buffer2d->Lock2D(&scan0, &pitch))) {
+  bool has_2d = SUCCEEDED(buffer.As(&buffer2d));
+  bool lock2d_ok = has_2d && SUCCEEDED(buffer2d->Lock2D(&scan0, &pitch));
+  if (has_2d && !lock2d_ok) {
+    DebugLog("OnPreviewSample: Lock2D failed, falling back to Lock");
+  }
+  if (lock2d_ok) {
     const int row_bytes = cur_w * 4;
     for (int row = 0; row < cur_h; ++row) {
       const ptrdiff_t src_off = static_cast<ptrdiff_t>(
@@ -685,7 +811,10 @@ void Camera::OnPreviewSample(IMFSample* sample) {
   if (!copied) {
     BYTE* raw = nullptr;
     DWORD raw_len = 0;
-    if (FAILED(buffer->Lock(&raw, nullptr, &raw_len))) return;
+    if (FAILED(buffer->Lock(&raw, nullptr, &raw_len))) {
+      DebugLog("OnPreviewSample: Lock failed, dropping frame");
+      return;
+    }
     if (raw_len >= packed_len) {
       std::memcpy(packed_frame_.data(), raw, packed_len);
       copied = true;
@@ -800,6 +929,7 @@ void Camera::TakePicture(
   {
     std::lock_guard<std::mutex> lk(state_mutex_);
     if (state_ != CameraState::kRunning && state_ != CameraState::kPaused) {
+      DebugLog("TakePicture: rejected, state=" + CameraStateStr(state_));
       result->Error("not_running", "Camera is not running");
       return;
     }
@@ -810,6 +940,7 @@ void Camera::TakePicture(
   {
     std::lock_guard<std::mutex> lk(latest_frame_mutex_);
     if (latest_frame_.empty()) {
+      DebugLog("TakePicture: rejected, no frame available");
       result->Error("no_frame", "No frame available for capture");
       return;
     }
@@ -819,6 +950,9 @@ void Camera::TakePicture(
     width  = preview_width_;
     height = preview_height_;
   }
+
+  DebugLog("TakePicture: capturing frame " + std::to_string(width) +
+           "x" + std::to_string(height));
 
   auto* raw_result = result.release();
   const int camera_id = camera_id_;
@@ -832,12 +966,15 @@ void Camera::TakePicture(
     FlipHorizontal(frame_copy.data(), width, height);
 
     std::wstring path = PhotoHandler::GeneratePath(camera_id);
+    DebugLog("TakePicture: writing to " + WstrToUtf8(path));
     std::string  write_error;
     if (PhotoHandler::Write(frame_copy.data(), width, height, path,
                             &write_error)) {
+      DebugLog("TakePicture: write succeeded");
       async_result->Success(
           flutter::EncodableValue(WstrToUtf8(path)));
     } else {
+      DebugLog("TakePicture: write failed: " + write_error);
       async_result->Error("capture_failed", write_error);
     }
     CoUninitialize();
@@ -853,12 +990,14 @@ void Camera::StartVideoRecording(
   {
     std::lock_guard<std::mutex> lk(state_mutex_);
     if (state_ != CameraState::kRunning && state_ != CameraState::kPaused) {
+      DebugLog("StartVideoRecording: rejected, state=" + CameraStateStr(state_));
       result->Error("not_running", "Camera is not running");
       return;
     }
   }
 
   if (is_recording_.load()) {
+    DebugLog("StartVideoRecording: rejected, already recording");
     result->Error("already_recording", "Recording is already in progress");
     return;
   }
@@ -866,6 +1005,7 @@ void Camera::StartVideoRecording(
   if (!record_handler_) {
     record_handler_ = std::make_unique<RecordHandler>();
   } else if (!record_handler_->CanStart()) {
+    DebugLog("StartVideoRecording: rejected, record_handler cannot start");
     result->Error("already_recording", "Recording cannot be started");
     return;
   }
@@ -916,7 +1056,7 @@ void Camera::StartVideoRecording(
 
   hr = capture_engine_->StartRecord();
   if (FAILED(hr)) {
-    DebugLog("StartVideoRecording: StartRecord failed " + std::to_string(hr));
+    DebugLog("StartVideoRecording: StartRecord failed " + HrToString(hr));
     is_recording_ = false;
     record_handler_.reset();
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> r;
@@ -933,10 +1073,12 @@ void Camera::StopVideoRecording(
   DebugLog("Camera::StopVideoRecording called");
 
   if (!is_recording_.load()) {
+    DebugLog("StopVideoRecording: rejected, not currently recording");
     result->Error("not_recording", "No recording in progress");
     return;
   }
   if (record_handler_ && !record_handler_->CanStop()) {
+    DebugLog("StopVideoRecording: rejected, record_handler cannot stop");
     result->Error("not_recording", "Recording cannot be stopped");
     return;
   }
@@ -950,7 +1092,7 @@ void Camera::StopVideoRecording(
 
   HRESULT hr = capture_engine_->StopRecord(TRUE, FALSE);
   if (FAILED(hr)) {
-    DebugLog("StopVideoRecording: StopRecord failed " + std::to_string(hr));
+    DebugLog("StopVideoRecording: StopRecord failed " + HrToString(hr));
     is_recording_ = false;
     record_handler_.reset();
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> r;
@@ -967,6 +1109,7 @@ void Camera::StopVideoRecording(
 // ============================================================================
 
 void Camera::StartImageStream() {
+  DebugLog("Camera::StartImageStream camera_id=" + std::to_string(camera_id_));
   std::lock_guard<std::mutex> lk(image_stream_thread_mutex_);
   if (image_stream_join_thread_.joinable()) image_stream_join_thread_.join();
   if (image_stream_thread_.joinable()) return;
@@ -976,6 +1119,7 @@ void Camera::StartImageStream() {
 }
 
 void Camera::StopImageStream() {
+  DebugLog("Camera::StopImageStream camera_id=" + std::to_string(camera_id_));
   image_streaming_      = false;
   image_stream_running_ = false;
   image_stream_cv_.notify_all();
@@ -1079,12 +1223,14 @@ void Camera::ImageStreamLoop() {
 // ============================================================================
 
 void Camera::PausePreview() {
+  DebugLog("Camera::PausePreview camera_id=" + std::to_string(camera_id_));
   preview_paused_ = true;
   std::lock_guard<std::mutex> lk(state_mutex_);
   if (state_ == CameraState::kRunning) state_ = CameraState::kPaused;
 }
 
 void Camera::ResumePreview() {
+  DebugLog("Camera::ResumePreview camera_id=" + std::to_string(camera_id_));
   preview_paused_ = false;
   std::lock_guard<std::mutex> lk(state_mutex_);
   if (state_ == CameraState::kPaused) state_ = CameraState::kRunning;
@@ -1144,6 +1290,7 @@ bool Camera::IsDisposedOrDisposing() const {
 }
 
 void Camera::DisposeAsync(std::function<void()> on_done) {
+  DebugLog("Camera::DisposeAsync camera_id=" + std::to_string(camera_id_));
   std::lock_guard<std::mutex> lk(dispose_mutex_);
   {
     std::lock_guard<std::mutex> state_lk(state_mutex_);
@@ -1181,13 +1328,19 @@ void Camera::DisposeInternal() {
   // Stop recording (non-finalizing, we don't care about the output file).
   if (is_recording_.load() && capture_engine_) {
     is_recording_ = false;
-    capture_engine_->StopRecord(FALSE, FALSE);
+    HRESULT stop_rec_hr = capture_engine_->StopRecord(FALSE, FALSE);
+    if (FAILED(stop_rec_hr)) {
+      DebugLog("DisposeInternal: StopRecord failed " + HrToString(stop_rec_hr));
+    }
     record_handler_.reset();
   }
 
   // Stop preview and release engine.
   if (capture_engine_) {
-    capture_engine_->StopPreview();
+    HRESULT stop_prev_hr = capture_engine_->StopPreview();
+    if (FAILED(stop_prev_hr)) {
+      DebugLog("DisposeInternal: StopPreview failed " + HrToString(stop_prev_hr));
+    }
     capture_engine_.Reset();
   }
 

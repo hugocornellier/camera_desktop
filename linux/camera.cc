@@ -44,6 +44,8 @@ int64_t Camera::RegisterTexture() {
   texture_ = camera_texture_new();
   FlTexture* fl_tex = camera_texture_as_fl_texture(texture_);
   if (!fl_texture_registrar_register_texture(texture_registrar_, fl_tex)) {
+    g_info("[camera_desktop] Camera %d: failed to register Flutter texture",
+           camera_id_);
     g_object_unref(texture_);
     texture_ = nullptr;
     return -1;
@@ -54,6 +56,8 @@ int64_t Camera::RegisterTexture() {
 
 void Camera::Initialize(FlMethodCall* method_call) {
   if (state_.load() != CameraState::kCreated) {
+    g_info("[camera_desktop] Camera %d: Initialize called in unexpected state %d",
+           camera_id_, static_cast<int>(state_.load()));
     g_autoptr(FlValue) error_details = fl_value_new_null();
     fl_method_call_respond_error(method_call, "already_initialized",
                                  "Camera is already initialized or disposed",
@@ -65,8 +69,15 @@ void Camera::Initialize(FlMethodCall* method_call) {
   pending_init_call_ = FL_METHOD_CALL(g_object_ref(method_call));
   first_frame_received_.store(false);
 
+  g_info("[camera_desktop] Initializing camera %d (%s backend, %dx%d@%dfps)",
+         camera_id_,
+         config_.backend == CameraBackend::kPipeWire ? "PipeWire" : "V4L2",
+         config_.target_width, config_.target_height, config_.target_fps);
+
   GError* error = nullptr;
   if (!BuildPipeline(&error)) {
+    g_info("[camera_desktop] Camera %d: BuildPipeline failed: %s", camera_id_,
+           error ? error->message : "unknown error");
     RespondToPendingInit(false, error->message);
     g_error_free(error);
     state_.store(CameraState::kCreated);
@@ -77,6 +88,8 @@ void Camera::Initialize(FlMethodCall* method_call) {
   GstStateChangeReturn ret =
       gst_element_set_state(pipeline_, GST_STATE_PLAYING);
   if (ret == GST_STATE_CHANGE_FAILURE) {
+    g_info("[camera_desktop] Camera %d: gst_element_set_state(PLAYING) failed",
+           camera_id_);
     RespondToPendingInit(false, "Failed to start GStreamer pipeline");
     gst_object_unref(pipeline_);
     pipeline_ = nullptr;
@@ -127,6 +140,7 @@ bool Camera::BuildPipeline(GError** error) {
         config_.target_height, config_.target_fps);
   }
 
+  g_info("[camera_desktop] Pipeline: %s", pipeline_str);
   pipeline_ = gst_parse_launch(pipeline_str, error);
   g_free(pipeline_str);
 
@@ -137,6 +151,8 @@ bool Camera::BuildPipeline(GError** error) {
   // Get the tee element (needed for recording branch attachment).
   tee_ = gst_bin_get_by_name(GST_BIN(pipeline_), "t");
   if (!tee_) {
+    g_info("[camera_desktop] Camera %d: tee element not found in pipeline",
+           camera_id_);
     g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
                 "Failed to find tee in pipeline");
     gst_object_unref(pipeline_);
@@ -150,11 +166,16 @@ bool Camera::BuildPipeline(GError** error) {
   videoflip_ = gst_bin_get_by_name(GST_BIN(pipeline_), "flip");
   if (videoflip_) {
     gst_object_unref(videoflip_);  // Pipeline holds the ref.
+  } else {
+    g_info("[camera_desktop] Camera %d: videoflip element not found in pipeline"
+           " (mirror toggling will be unavailable)", camera_id_);
   }
 
   // Get the appsink element.
   appsink_ = gst_bin_get_by_name(GST_BIN(pipeline_), "sink");
   if (!appsink_) {
+    g_info("[camera_desktop] Camera %d: appsink element not found in pipeline",
+           camera_id_);
     g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
                 "Failed to find appsink in pipeline");
     gst_object_unref(pipeline_);
@@ -210,13 +231,17 @@ GstFlowReturn Camera::OnNewSample(GstAppSink* sink, gpointer user_data) {
   Camera* self = static_cast<Camera*>(user_data);
 
   GstSample* sample = gst_app_sink_pull_sample(sink);
-  if (!sample) return GST_FLOW_ERROR;
+  if (!sample) {
+    g_warning("[camera_desktop] OnNewSample: gst_app_sink_pull_sample returned null");
+    return GST_FLOW_ERROR;
+  }
 
   GstBuffer* buffer = gst_sample_get_buffer(sample);
   GstCaps* caps = gst_sample_get_caps(sample);
 
   GstVideoInfo info;
   if (!gst_video_info_from_caps(&info, caps)) {
+    g_warning("[camera_desktop] OnNewSample: gst_video_info_from_caps failed");
     gst_sample_unref(sample);
     return GST_FLOW_ERROR;
   }
@@ -227,6 +252,7 @@ GstFlowReturn Camera::OnNewSample(GstAppSink* sink, gpointer user_data) {
 
   GstMapInfo map;
   if (!gst_buffer_map(buffer, &map, GST_MAP_READ)) {
+    g_warning("[camera_desktop] OnNewSample: gst_buffer_map failed");
     gst_sample_unref(sample);
     return GST_FLOW_ERROR;
   }
@@ -235,6 +261,8 @@ GstFlowReturn Camera::OnNewSample(GstAppSink* sink, gpointer user_data) {
   // C-2: first_frame_received_ is atomic, safe cross-thread read/write.
   bool is_first_frame = !self->first_frame_received_.load();
   if (is_first_frame) {
+    g_info("[camera_desktop] Camera %d: first frame received (%dx%d)",
+           self->camera_id_, width, height);
     self->first_frame_received_.store(true);
     // H-2: actual_width_/height_ are atomic, safe cross-thread write.
     self->actual_width_.store(width);
@@ -395,6 +423,11 @@ gboolean Camera::OnBusMessage(GstBus* bus, GstMessage* msg,
       gchar* debug = nullptr;
       gst_message_parse_error(msg, &err, &debug);
 
+      g_info("[camera_desktop] Camera %d: GStreamer error: %s (debug: %s)",
+             self->camera_id_,
+             err ? err->message : "unknown",
+             debug ? debug : "none");
+
       // C-2: load state_ atomically.
       CameraState s = self->state_.load();
       if (s == CameraState::kInitializing) {
@@ -450,6 +483,8 @@ void Camera::SendError(const std::string& description) {
 void Camera::TakePicture(FlMethodCall* method_call) {
   CameraState s = state_.load();
   if (s != CameraState::kRunning && s != CameraState::kPaused) {
+    g_info("[camera_desktop] Camera %d: TakePicture called but camera is not"
+           " running (state=%d)", camera_id_, static_cast<int>(s));
     g_autoptr(FlValue) details = fl_value_new_null();
     fl_method_call_respond_error(method_call, "not_running",
                                  "Camera is not running", details, nullptr);
@@ -528,6 +563,8 @@ void Camera::TakePicture(FlMethodCall* method_call) {
 void Camera::StartVideoRecording(FlMethodCall* method_call) {
   CameraState s = state_.load();
   if (s != CameraState::kRunning && s != CameraState::kPaused) {
+    g_info("[camera_desktop] Camera %d: StartVideoRecording called but camera"
+           " is not running (state=%d)", camera_id_, static_cast<int>(s));
     g_autoptr(FlValue) details = fl_value_new_null();
     fl_method_call_respond_error(method_call, "not_running",
                                  "Camera is not running", details, nullptr);
@@ -545,6 +582,8 @@ void Camera::StartVideoRecording(FlMethodCall* method_call) {
                                 config_.target_bitrate,
                                 config_.audio_bitrate,
                                 config_.enable_audio, &error)) {
+      g_info("[camera_desktop] Camera %d: RecordHandler::Setup failed: %s",
+             camera_id_, error ? error->message : "unknown error");
       g_autoptr(FlValue) details = fl_value_new_null();
       fl_method_call_respond_error(
           method_call, "recording_setup_failed",
@@ -586,6 +625,8 @@ void Camera::StartVideoRecording(FlMethodCall* method_call) {
 
 void Camera::StopVideoRecording(FlMethodCall* method_call) {
   if (!record_handler_->is_recording()) {
+    g_info("[camera_desktop] Camera %d: StopVideoRecording called but not"
+           " recording", camera_id_);
     g_autoptr(FlValue) details = fl_value_new_null();
     fl_method_call_respond_error(method_call, "not_recording",
                                  "No recording in progress", details, nullptr);
@@ -596,10 +637,12 @@ void Camera::StopVideoRecording(FlMethodCall* method_call) {
 }
 
 void Camera::StartImageStream() {
+  g_info("[camera_desktop] Camera %d: starting image stream", camera_id_);
   image_streaming_ = true;
 }
 
 void Camera::StopImageStream() {
+  g_info("[camera_desktop] Camera %d: stopping image stream", camera_id_);
   image_streaming_ = false;
 }
 
@@ -615,21 +658,30 @@ void Camera::UnregisterImageStreamCallback() {
 }
 
 void Camera::PausePreview() {
+  g_info("[camera_desktop] Camera %d: pausing preview", camera_id_);
   // C-3: atomic store, safe cross-thread write.
   preview_paused_.store(true);
 }
 
 void Camera::ResumePreview() {
+  g_info("[camera_desktop] Camera %d: resuming preview", camera_id_);
   preview_paused_.store(false);
 }
 
 void Camera::SetMirror(bool mirrored) {
-  if (!videoflip_) return;
+  if (!videoflip_) {
+    g_info("[camera_desktop] Camera %d: SetMirror(%s) ignored, videoflip_ is null",
+           camera_id_, mirrored ? "true" : "false");
+    return;
+  }
+  g_info("[camera_desktop] Camera %d: SetMirror(%s)", camera_id_,
+         mirrored ? "true" : "false");
   // GstVideoFlipMethod: 0 = none (identity), 4 = horizontal-flip
   g_object_set(videoflip_, "method", mirrored ? 4 : 0, nullptr);
 }
 
 void Camera::Dispose() {
+  g_info("[camera_desktop] Camera %d: disposing", camera_id_);
   // C-2: use atomic exchange so the check-and-set is race-free. If two threads
   // somehow call Dispose() concurrently, only one proceeds.
   CameraState prev = state_.exchange(CameraState::kDisposing);
@@ -687,4 +739,5 @@ void Camera::Dispose() {
                                   nullptr, nullptr, nullptr);
 
   state_.store(CameraState::kDisposed);
+  g_info("[camera_desktop] Camera %d: disposed", camera_id_);
 }

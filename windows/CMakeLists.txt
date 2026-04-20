@@ -24,6 +24,14 @@ set_target_properties(${PLUGIN_NAME} PROPERTIES
 
 target_compile_definitions(${PLUGIN_NAME} PRIVATE FLUTTER_PLUGIN_IMPL)
 
+if(MSVC)
+  # Force MSVC to read source (and emit narrow string literals) as UTF-8,
+  # regardless of the host's ANSI code page. Without this, hosts with a
+  # non-UTF-8 ACP (e.g. CP936 on Simplified Chinese Windows) fail with C4819
+  # → C2220 on our Unicode comments. See chinese-pc-compat.md.
+  target_compile_options(${PLUGIN_NAME} PRIVATE /utf-8)
+endif()
+
 target_include_directories(${PLUGIN_NAME} INTERFACE
   "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )

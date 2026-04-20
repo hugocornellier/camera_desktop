@@ -66,11 +66,14 @@ static void handle_available_cameras(CameraDesktopPlugin* self,
     // Async path: request portal permission, enumerate PipeWire nodes.
     g_object_ref(method_call);
     self->data->portal->EnumerateDevicesAsync(
-        [self, method_call](std::vector<DeviceInfo> devices) {
+        [method_call](std::vector<DeviceInfo> devices) {
           // If portal returned no devices, fall back to V4L2.
           if (devices.empty()) {
+            g_info("[camera_desktop] PipeWire returned no cameras, falling back to V4L2");
             devices = DeviceEnumerator::EnumerateDevices();
           }
+          g_info("[camera_desktop] availableCameras returning %zu device(s)",
+                 devices.size());
           respond_with_devices(method_call, devices);
           g_object_unref(method_call);
         });
@@ -79,6 +82,8 @@ static void handle_available_cameras(CameraDesktopPlugin* self,
 
   // V4L2 path (synchronous, for native Linux installs).
   auto devices = DeviceEnumerator::EnumerateDevices();
+  g_info("[camera_desktop] availableCameras returning %zu device(s)",
+         devices.size());
   respond_with_devices(method_call, devices);
 }
 
@@ -110,8 +115,14 @@ static void handle_create(CameraDesktopPlugin* self,
   } else if (fps_val && fl_value_get_type(fps_val) == FL_VALUE_TYPE_FLOAT) {
     target_fps = static_cast<int>(fl_value_get_float(fps_val));
   }
-  if (target_fps < 5) target_fps = 5;
-  if (target_fps > 60) target_fps = 60;
+  if (target_fps < 5) {
+    g_info("[camera_desktop] fps %d clamped to minimum 5", target_fps);
+    target_fps = 5;
+  }
+  if (target_fps > 60) {
+    g_info("[camera_desktop] fps %d clamped to maximum 60", target_fps);
+    target_fps = 60;
+  }
 
   int target_bitrate = 0;
   FlValue* bitrate_val = fl_value_lookup_string(args, "videoBitrate");
@@ -121,7 +132,11 @@ static void handle_create(CameraDesktopPlugin* self,
              fl_value_get_type(bitrate_val) == FL_VALUE_TYPE_FLOAT) {
     target_bitrate = static_cast<int>(fl_value_get_float(bitrate_val));
   }
-  if (target_bitrate < 0) target_bitrate = 0;
+  if (target_bitrate < 0) {
+    g_info("[camera_desktop] videoBitrate %d clamped to minimum 0",
+           target_bitrate);
+    target_bitrate = 0;
+  }
 
   int audio_bitrate = 0;
   FlValue* audio_bitrate_val = fl_value_lookup_string(args, "audioBitrate");
@@ -132,7 +147,11 @@ static void handle_create(CameraDesktopPlugin* self,
              fl_value_get_type(audio_bitrate_val) == FL_VALUE_TYPE_FLOAT) {
     audio_bitrate = static_cast<int>(fl_value_get_float(audio_bitrate_val));
   }
-  if (audio_bitrate < 0) audio_bitrate = 0;
+  if (audio_bitrate < 0) {
+    g_info("[camera_desktop] audioBitrate %d clamped to minimum 0",
+           audio_bitrate);
+    audio_bitrate = 0;
+  }
 
   // Extract device path from the camera name.
   // Format: "Friendly Name (/dev/videoN)", extract the path in parentheses.
@@ -145,6 +164,8 @@ static void handle_create(CameraDesktopPlugin* self,
     device_path = name_str.substr(paren_start + 1, paren_end - paren_start - 1);
   } else {
     // Fallback: treat the whole name as a device path.
+    g_info("[camera_desktop] No parentheses found in camera name '%s',"
+           " using full name as device path", camera_name);
     device_path = name_str;
   }
 
@@ -184,12 +205,19 @@ static void handle_create(CameraDesktopPlugin* self,
     config.pw_fd = self->data->portal->pw_fd();
   }
 
+  g_info("[camera_desktop] Creating camera: device=%s, backend=%s, %dx%d@%dfps",
+         config.device_path.c_str(),
+         config.backend == CameraBackend::kPipeWire ? "PipeWire" : "V4L2",
+         config.target_width, config.target_height, config.target_fps);
+
   int camera_id = self->data->next_camera_id++;
   auto camera = std::make_unique<Camera>(
       camera_id, self->texture_registrar, self->channel, config);
 
   int64_t texture_id = camera->RegisterTexture();
   if (texture_id < 0) {
+    g_info("[camera_desktop] Camera %d: texture registration failed",
+           camera_id);
     g_autoptr(FlValue) details = fl_value_new_null();
     fl_method_call_respond_error(method_call, "texture_registration_failed",
                                  "Failed to register Flutter texture",
@@ -213,6 +241,7 @@ static Camera* find_camera(CameraDesktopPlugin* self,
   int camera_id = fl_value_get_int(fl_value_lookup_string(args, "cameraId"));
   auto it = self->data->cameras.find(camera_id);
   if (it == self->data->cameras.end()) {
+    g_info("[camera_desktop] find_camera: camera_id %d not found", camera_id);
     g_autoptr(FlValue) details = fl_value_new_null();
     fl_method_call_respond_error(method_call, "camera_not_found",
                                  "No camera found with the given ID",
@@ -257,6 +286,10 @@ static void handle_start_image_stream(CameraDesktopPlugin* self,
   if (!camera) return;
   camera->StartImageStream();
   const int64_t stream_handle = camera_desktop_ffi_register_stream_handle(camera);
+  FlValue* args = fl_method_call_get_args(method_call);
+  int camera_id = fl_value_get_int(fl_value_lookup_string(args, "cameraId"));
+  g_info("[camera_desktop] Camera %d: image stream started, streamHandle=%" G_GINT64_FORMAT,
+         camera_id, stream_handle);
   g_autoptr(FlValue) result = fl_value_new_map();
   fl_value_set_string_take(result, "streamHandle",
                            fl_value_new_int(stream_handle));
@@ -268,9 +301,16 @@ static void handle_stop_image_stream(CameraDesktopPlugin* self,
   Camera* camera = find_camera(self, method_call);
   if (!camera) return;
   FlValue* args = fl_method_call_get_args(method_call);
+  int camera_id = fl_value_get_int(fl_value_lookup_string(args, "cameraId"));
   FlValue* handle_val = fl_value_lookup_string(args, "streamHandle");
   if (handle_val && fl_value_get_type(handle_val) == FL_VALUE_TYPE_INT) {
-    camera_desktop_ffi_release_stream_handle(fl_value_get_int(handle_val));
+    int64_t stream_handle = fl_value_get_int(handle_val);
+    g_info("[camera_desktop] Camera %d: stopping image stream,"
+           " streamHandle=%" G_GINT64_FORMAT, camera_id, stream_handle);
+    camera_desktop_ffi_release_stream_handle(stream_handle);
+  } else {
+    g_info("[camera_desktop] Camera %d: stopping image stream (no handle)",
+           camera_id);
   }
   camera->StopImageStream();
   fl_method_call_respond_success(method_call, fl_value_new_null(), nullptr);
@@ -298,9 +338,12 @@ static void handle_set_mirror(CameraDesktopPlugin* self,
   if (!camera) return;
 
   FlValue* args = fl_method_call_get_args(method_call);
+  int camera_id = fl_value_get_int(fl_value_lookup_string(args, "cameraId"));
   FlValue* mirrored_val = fl_value_lookup_string(args, "mirrored");
   bool mirrored = mirrored_val ? fl_value_get_bool(mirrored_val) : true;
 
+  g_info("[camera_desktop] Camera %d: setMirror(%s)", camera_id,
+         mirrored ? "true" : "false");
   camera->SetMirror(mirrored);
   fl_method_call_respond_success(method_call, fl_value_new_null(), nullptr);
 }
@@ -310,6 +353,7 @@ static void handle_dispose(CameraDesktopPlugin* self,
   FlValue* args = fl_method_call_get_args(method_call);
   int camera_id = fl_value_get_int(fl_value_lookup_string(args, "cameraId"));
 
+  g_info("[camera_desktop] handle_dispose: camera_id=%d", camera_id);
   auto it = self->data->cameras.find(camera_id);
   if (it != self->data->cameras.end()) {
     camera_desktop_ffi_release_handles_for_camera(it->second.get());
@@ -369,6 +413,8 @@ static void camera_desktop_plugin_dispose(GObject* object) {
 
   // Dispose all cameras.
   if (self->data) {
+    g_info("[camera_desktop] Plugin teardown: disposing %zu camera(s)",
+           self->data->cameras.size());
     for (auto& pair : self->data->cameras) {
       camera_desktop_ffi_release_handles_for_camera(pair.second.get());
       pair.second->Dispose();
@@ -390,7 +436,10 @@ static void camera_desktop_plugin_init(CameraDesktopPlugin* self) {
   self->data = new PluginData();
   self->data->use_pipewire = PipeWirePortal::ShouldUsePipeWire();
   if (self->data->use_pipewire) {
+    g_info("[camera_desktop] Plugin init: PipeWire mode enabled");
     self->data->portal = std::make_unique<PipeWirePortal>();
+  } else {
+    g_info("[camera_desktop] Plugin init: V4L2 mode (no PipeWire)");
   }
 }
 
@@ -398,6 +447,8 @@ void camera_desktop_plugin_register_with_registrar(
     FlPluginRegistrar* registrar) {
   // Initialize GStreamer (safe to call multiple times).
   gst_init(nullptr, nullptr);
+  g_info("[camera_desktop] GStreamer initialized (version %s)",
+         gst_version_string());
 
   CameraDesktopPlugin* plugin = CAMERA_DESKTOP_PLUGIN(
       g_object_new(camera_desktop_plugin_get_type(), nullptr));

@@ -38,9 +38,19 @@ class RecordHandler: NSObject {
         let url = URL(fileURLWithPath: path)
 
         // Remove any stale file at this path.
-        try? FileManager.default.removeItem(at: url)
+        do {
+            try FileManager.default.removeItem(at: url)
+            print("[camera_desktop] RecordHandler: removed stale file at path=\(path)")
+        } catch {
+            // Non-fatal: file may simply not exist yet.
+            let nsError = error as NSError
+            if nsError.code != NSFileNoSuchFileError {
+                print("[camera_desktop] RecordHandler: failed to remove stale file at path=\(path), error=\(error.localizedDescription)")
+            }
+        }
 
         let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
+        print("[camera_desktop] AVAssetWriter created: path=\(path)")
 
         // Video input, H.264 encoding.
         var compression: [String: Any] = [
@@ -57,10 +67,13 @@ class RecordHandler: NSObject {
             AVVideoHeightKey: height,
             AVVideoCompressionPropertiesKey: compression,
         ]
+        print("[camera_desktop] Video encoder settings: codec=h264, \(width)x\(height), fps=\(targetFps), bitrate=\(targetBitrate > 0 ? "\(targetBitrate)bps" : "default")")
         let vInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
         vInput.expectsMediaDataInRealTime = true
         if writer.canAdd(vInput) {
             writer.add(vInput)
+        } else {
+            print("[camera_desktop] RecordHandler: writer.canAdd(videoInput) returned false — video track will not be recorded")
         }
 
         // Audio input, AAC encoding.
@@ -76,6 +89,8 @@ class RecordHandler: NSObject {
             aInput!.expectsMediaDataInRealTime = true
             if writer.canAdd(aInput!) {
                 writer.add(aInput!)
+            } else {
+                print("[camera_desktop] RecordHandler: writer.canAdd(audioInput) returned false — audio track will not be recorded")
             }
         }
 
@@ -96,11 +111,26 @@ class RecordHandler: NSObject {
     /// Appends a video sample buffer to the recording.
     func appendVideoBuffer(_ sampleBuffer: CMSampleBuffer) {
         lock.lock()
-        guard isRecording,
-              let writer = assetWriter,
-              writer.status == .writing,
-              let input = videoInput,
-              input.isReadyForMoreMediaData else {
+        guard isRecording else {
+            lock.unlock()
+            return
+        }
+        guard let writer = assetWriter else {
+            lock.unlock()
+            print("[camera_desktop] appendVideoBuffer: dropped — assetWriter is nil")
+            return
+        }
+        guard writer.status == .writing else {
+            lock.unlock()
+            print("[camera_desktop] appendVideoBuffer: dropped — writer status is \(writer.status.rawValue), not .writing")
+            return
+        }
+        guard let input = videoInput else {
+            lock.unlock()
+            print("[camera_desktop] appendVideoBuffer: dropped — videoInput is nil")
+            return
+        }
+        guard input.isReadyForMoreMediaData else {
             lock.unlock()
             return
         }
@@ -118,13 +148,31 @@ class RecordHandler: NSObject {
     /// Appends an audio sample buffer to the recording.
     func appendAudioBuffer(_ sampleBuffer: CMSampleBuffer) {
         lock.lock()
-        guard isRecording,
-              let writer = assetWriter,
-              writer.status == .writing,
-              let input = audioInput,
-              input.isReadyForMoreMediaData,
-              sessionStarted else {
+        guard isRecording else {
             lock.unlock()
+            return
+        }
+        guard let writer = assetWriter else {
+            lock.unlock()
+            print("[camera_desktop] appendAudioBuffer: dropped — assetWriter is nil")
+            return
+        }
+        guard writer.status == .writing else {
+            lock.unlock()
+            print("[camera_desktop] appendAudioBuffer: dropped — writer status is \(writer.status.rawValue), not .writing")
+            return
+        }
+        guard let input = audioInput else {
+            lock.unlock()
+            return
+        }
+        guard input.isReadyForMoreMediaData else {
+            lock.unlock()
+            return
+        }
+        guard sessionStarted else {
+            lock.unlock()
+            print("[camera_desktop] appendAudioBuffer: dropped — session not yet started (no video frame received)")
             return
         }
         lock.unlock()
@@ -159,8 +207,11 @@ class RecordHandler: NSObject {
 
         writer.finishWriting {
             if writer.status == .completed {
+                print("[camera_desktop] AVAssetWriter finishWriting completed: path=\(path ?? "nil")")
                 completion(path)
             } else {
+                let errorMsg = writer.error?.localizedDescription ?? "unknown error"
+                print("[camera_desktop] AVAssetWriter finishWriting failed: status=\(writer.status.rawValue), error=\(errorMsg)")
                 completion(nil)
             }
         }

@@ -5,12 +5,18 @@
 
 #include <chrono>
 #include <sstream>
+#include <string>
 #include <vector>
+
+#include "logging.h"
 
 using Microsoft::WRL::ComPtr;
 
 bool PhotoHandler::Write(const uint8_t* bgra, int width, int height,
                          const std::wstring& path, std::string* error) {
+  DebugLog("PhotoHandler::Write: " + std::to_string(width) + "x" +
+           std::to_string(height) + " path.length=" + std::to_string(path.size()));
+
   if (!bgra || width <= 0 || height <= 0) {
     if (error) *error = "Invalid image buffer";
     return false;
@@ -20,6 +26,7 @@ bool PhotoHandler::Write(const uint8_t* bgra, int width, int height,
   HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr,
                                 CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic));
   if (FAILED(hr)) {
+    DebugLog("PhotoHandler::Write: CoCreateInstance WIC factory failed " + HrToString(hr));
     if (error) *error = "Failed to create WIC factory";
     return false;
   }
@@ -27,12 +34,14 @@ bool PhotoHandler::Write(const uint8_t* bgra, int width, int height,
   ComPtr<IWICStream> stream;
   hr = wic->CreateStream(&stream);
   if (FAILED(hr)) {
+    DebugLog("PhotoHandler::Write: CreateStream failed " + HrToString(hr));
     if (error) *error = "Failed to create WIC stream";
     return false;
   }
 
   hr = stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE);
   if (FAILED(hr)) {
+    DebugLog("PhotoHandler::Write: InitializeFromFilename failed " + HrToString(hr));
     if (error) *error = "Failed to open output file";
     return false;
   }
@@ -113,6 +122,7 @@ bool PhotoHandler::Write(const uint8_t* bgra, int width, int height,
     return false;
   }
 
+  DebugLog("PhotoHandler::Write: success " + std::to_string(width) + "x" + std::to_string(height));
   return true;
 }
 
@@ -123,5 +133,8 @@ std::wstring PhotoHandler::GeneratePath(int camera_id) {
   auto now = std::chrono::steady_clock::now().time_since_epoch().count();
   std::wostringstream ss;
   ss << temp_dir << L"camera_desktop_" << camera_id << L"_" << now << L".jpg";
-  return ss.str();
+  std::wstring path = ss.str();
+  DebugLog("PhotoHandler::GeneratePath: camera_id=" + std::to_string(camera_id) +
+           " path=" + WideToUtf8(path));
+  return path;
 }
