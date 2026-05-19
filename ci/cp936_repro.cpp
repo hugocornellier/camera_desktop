@@ -21,5 +21,5 @@
 //   U+2264 LESS-THAN OR EQUAL TO        ≤
 //   U+2500 BOX DRAWINGS LIGHT HORIZONTAL ─
 //
-// No code needed — /c (compile only) is sufficient to trigger C4819 on the
+// No code needed: /c (compile only) is sufficient to trigger C4819 on the
 // comment bytes above.

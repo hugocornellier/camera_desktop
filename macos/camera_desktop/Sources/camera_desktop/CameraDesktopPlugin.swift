@@ -55,7 +55,6 @@ public class CameraDesktopPlugin: NSObject, FlutterPlugin, NSApplicationDelegate
         sessions.removeAll()
         sessionsLock.unlock()
 
-        print("[camera_desktop] disposeAllSessions: disposing \(snapshot.count) session(s)")
         for (cameraId, session) in snapshot {
             ImageStreamHandleBridge.releaseHandles(forCameraId: cameraId)
             session.dispose()
@@ -142,7 +141,6 @@ public class CameraDesktopPlugin: NSObject, FlutterPlugin, NSApplicationDelegate
         if targetFps < 5 { targetFps = 5 }
         if targetFps > 60 { targetFps = 60 }
         if targetFps != rawFps {
-            print("[camera_desktop] handleCreate: fps clamped from \(rawFps) to \(targetFps)")
         }
 
         var targetBitrate = 0
@@ -154,7 +152,6 @@ public class CameraDesktopPlugin: NSObject, FlutterPlugin, NSApplicationDelegate
         let rawBitrate = targetBitrate
         if targetBitrate < 0 { targetBitrate = 0 }
         if targetBitrate != rawBitrate {
-            print("[camera_desktop] handleCreate: videoBitrate clamped from \(rawBitrate) to \(targetBitrate)")
         }
 
         var targetAudioBitrate = 0
@@ -166,7 +163,6 @@ public class CameraDesktopPlugin: NSObject, FlutterPlugin, NSApplicationDelegate
         let rawAudioBitrate = targetAudioBitrate
         if targetAudioBitrate < 0 { targetAudioBitrate = 0 }
         if targetAudioBitrate != rawAudioBitrate {
-            print("[camera_desktop] handleCreate: audioBitrate clamped from \(rawAudioBitrate) to \(targetAudioBitrate)")
         }
 
         // Extract device ID from camera name: "Friendly Name (deviceId)"
@@ -177,7 +173,6 @@ public class CameraDesktopPlugin: NSObject, FlutterPlugin, NSApplicationDelegate
             return
         }
 
-        print("[camera_desktop] handleCreate: cameraName=\(cameraName) deviceId=\(deviceId) resolutionPreset=\(resolutionPreset) enableAudio=\(enableAudio) fps=\(targetFps) videoBitrate=\(targetBitrate) audioBitrate=\(targetAudioBitrate)")
 
         let cameraId = nextCameraId
         nextCameraId += 1
@@ -310,7 +305,6 @@ public class CameraDesktopPlugin: NSObject, FlutterPlugin, NSApplicationDelegate
         }
 
         guard let session = sessions[cameraId] else {
-            print("[camera_desktop] findSession: no session found for cameraId=\(cameraId)")
             result(FlutterError(code: "camera_not_found",
                                 message: "No camera found with the given ID",
                                 details: nil))

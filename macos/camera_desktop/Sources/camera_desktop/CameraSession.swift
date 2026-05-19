@@ -215,7 +215,6 @@ class CameraSession: NSObject {
     func initialize(result: @escaping FlutterResult) {
         AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
             guard let self = self else { return }
-            print("[camera_desktop] Camera permission: \(granted ? "granted" : "denied")")
             if !granted {
                 DispatchQueue.main.async {
                     result(FlutterError(code: "permission_denied",
@@ -235,10 +234,8 @@ class CameraSession: NSObject {
 
         // Find the video device FIRST so we can validate preset support against it.
         let devices = AVCaptureDevice.captureDevices(mediaType: .video)
-        print("[camera_desktop] Device selection: requested deviceId=\(config.deviceId), available=\(devices.map { $0.uniqueID })")
         let exactMatch = devices.first(where: { $0.uniqueID == config.deviceId })
         if exactMatch == nil {
-            print("[camera_desktop] Exact device match not found for id=\(config.deviceId), falling back to first available device")
         }
         guard let device = exactMatch ?? devices.first else {
             DispatchQueue.main.async {
@@ -248,9 +245,7 @@ class CameraSession: NSObject {
             }
             return
         }
-        print("[camera_desktop] Device selected: uniqueID=\(device.uniqueID) name=\(device.localizedName) (exactMatch=\(exactMatch != nil))")
         videoDevice = device
-        print("[camera_desktop] Device found: uniqueID=\(device.uniqueID) deviceType=\(device.deviceType.rawValue) position=\(device.position.rawValue)")
 
         // Select preset based on what the device actually supports.
         let desiredPreset = DeviceEnumerator.sessionPreset(for: config.resolutionPreset)
@@ -261,7 +256,6 @@ class CameraSession: NSObject {
             chosenPreset = desiredPreset
         } else {
             usedFallback = true
-            print("[camera_desktop] Preset \(desiredPreset.rawValue) not supported by device, trying fallback")
             for fp in fallbackPresets {
                 if device.supportsSessionPreset(fp) && session.canSetSessionPreset(fp) {
                     chosenPreset = fp
@@ -270,7 +264,6 @@ class CameraSession: NSObject {
             }
         }
         session.sessionPreset = chosenPreset
-        print("[camera_desktop] Preset selected: \(chosenPreset.rawValue) (desired=\(desiredPreset.rawValue), usedFallback=\(usedFallback))")
 
         // Configure device.
         do {
@@ -284,14 +277,12 @@ class CameraSession: NSObject {
             device.unlockForConfiguration()
         } catch {
             // Non-fatal, continue with default settings.
-            print("[camera_desktop] Device lockForConfiguration failed (non-fatal): \(error.localizedDescription)")
         }
 
         // Add video input.
         do {
             let videoInput = try AVCaptureDeviceInput(device: device)
             let canAdd = session.canAddInput(videoInput)
-            print("[camera_desktop] canAddInput: \(canAdd)")
             guard canAdd else {
                 DispatchQueue.main.async {
                     result(FlutterError(code: "input_failed",
@@ -315,7 +306,6 @@ class CameraSession: NSObject {
         if config.enableAudio {
             let audioDevices = AVCaptureDevice.captureDevices(mediaType: .audio)
             let audioDevice = audioDevices.first
-            print("[camera_desktop] Audio device: \(audioDevice != nil ? audioDevice!.localizedName : "none found")")
             if let audioDevice = audioDevice {
                 do {
                     let audioInput = try AVCaptureDeviceInput(device: audioDevice)
@@ -324,7 +314,6 @@ class CameraSession: NSObject {
                     }
                 } catch {
                     // Non-fatal, continue without audio.
-                    print("[camera_desktop] Failed to add audio input (non-fatal): \(error.localizedDescription)")
                 }
             }
         }
@@ -337,7 +326,6 @@ class CameraSession: NSObject {
         ]
         vOutput.setSampleBufferDelegate(self, queue: captureQueue)
         let canAddOutput = session.canAddOutput(vOutput)
-        print("[camera_desktop] canAddOutput: \(canAddOutput)")
         guard canAddOutput else {
             DispatchQueue.main.async {
                 result(FlutterError(code: "output_failed",
@@ -356,7 +344,6 @@ class CameraSession: NSObject {
                 connection.isVideoMirrored = true
             }
         } else {
-            print("[camera_desktop] Video connection nil — mirroring not available for this output")
         }
 
         // Add audio output if enabled.
@@ -385,7 +372,6 @@ class CameraSession: NSObject {
                        object: session)
 
         let mirrorEnabled = vOutput.connection(with: .video)?.isVideoMirrored ?? false
-        print("[camera_desktop] Session configured: \(chosenPreset.rawValue), mirror=\(mirrorEnabled), audio=\(config.enableAudio)")
 
         captureSession = session
         pendingInitResult = result
@@ -393,12 +379,10 @@ class CameraSession: NSObject {
 
         // Start running, the first frame callback will respond to the pending result.
         session.startRunning()
-        print("[camera_desktop] session.startRunning() called, isRunning=\(session.isRunning)")
 
         // Timeout: if no frame arrives in 15 seconds, fail.
         DispatchQueue.main.asyncAfter(deadline: .now() + 15.0) { [weak self] in
             guard let self = self, let pending = self.pendingInitResult else { return }
-            print("[camera_desktop] Initialization timeout fired, no frames received within 15s")
             self.pendingInitResult = nil
             pending(FlutterError(code: "initialization_timeout",
                                  message: "Camera initialization timed out, no frames received",
@@ -409,7 +393,6 @@ class CameraSession: NSObject {
     @objc private func sessionRuntimeError(_ notification: Notification) {
         let error = notification.userInfo?[AVCaptureSessionErrorKey] as? Error
         let message = error?.localizedDescription ?? "Unknown runtime error"
-        print("[camera_desktop] AVCaptureSessionRuntimeError: \(message)")
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.methodChannel?.invokeMethod("cameraError", arguments: [
@@ -420,7 +403,6 @@ class CameraSession: NSObject {
     }
 
     @objc private func sessionWasInterrupted(_ notification: Notification) {
-        print("[camera_desktop] AVCaptureSessionWasInterrupted")
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.methodChannel?.invokeMethod("cameraError", arguments: [
@@ -431,7 +413,6 @@ class CameraSession: NSObject {
     }
 
     @objc private func sessionInterruptionEnded(_ notification: Notification) {
-        print("[camera_desktop] AVCaptureSessionInterruptionEnded — session recovering")
     }
 
     // MARK: - Photo Capture
@@ -442,7 +423,6 @@ class CameraSession: NSObject {
         bufferLock.unlock()
 
         guard let buffer = buffer else {
-            print("[camera_desktop] takePicture: latestBuffer is nil — no frames captured yet")
             result(FlutterError(code: "no_frame",
                                 message: "No frame available for capture",
                                 details: nil))
@@ -450,15 +430,12 @@ class CameraSession: NSObject {
         }
 
         let path = PhotoHandler.generatePath(cameraId: cameraId)
-        print("[camera_desktop] takePicture: writing photo to path=\(path)")
         sessionQueue.async {
             let success = PhotoHandler.takePicture(from: buffer, outputPath: path)
             DispatchQueue.main.async {
                 if success {
-                    print("[camera_desktop] takePicture: write succeeded, path=\(path)")
                     result(path)
                 } else {
-                    print("[camera_desktop] takePicture: write failed for path=\(path)")
                     result(FlutterError(code: "capture_failed",
                                         message: "Failed to write JPEG to disk",
                                         details: nil))
@@ -482,7 +459,6 @@ class CameraSession: NSObject {
                     audioBitrate: self.config.audioBitrate,
                     enableAudio: enableAudio
                 )
-                print("[camera_desktop] Recording started: path=\(path)")
                 DispatchQueue.main.async { result(nil) }
             } catch {
                 let message = error.localizedDescription
@@ -505,7 +481,6 @@ class CameraSession: NSObject {
 
         recordHandler.stopRecording { path in
             if let path = path {
-                print("[camera_desktop] Recording stopped: path=\(path)")
             }
             DispatchQueue.main.async {
                 if let path = path {
@@ -522,12 +497,10 @@ class CameraSession: NSObject {
     // MARK: - Image Streaming
 
     func startImageStream() {
-        print("[camera_desktop] startImageStream: cameraId=\(cameraId)")
         imageStreaming = true
     }
 
     func stopImageStream() {
-        print("[camera_desktop] stopImageStream: cameraId=\(cameraId)")
         imageStreaming = false
     }
 
@@ -548,12 +521,10 @@ class CameraSession: NSObject {
     // MARK: - Preview Control
 
     func pausePreview() {
-        print("[camera_desktop] pausePreview: cameraId=\(cameraId)")
         previewPaused = true
     }
 
     func resumePreview() {
-        print("[camera_desktop] resumePreview: cameraId=\(cameraId)")
         previewPaused = false
     }
 
@@ -564,11 +535,9 @@ class CameraSession: NSObject {
     func setMirror(mirrored: Bool) {
         sessionQueue.async { [self] in
             guard let connection = self.videoOutput?.connection(with: .video) else {
-                print("[camera_desktop] setMirror: video connection is nil, cannot set mirror=\(mirrored)")
                 return
             }
             guard connection.isVideoMirroringSupported else {
-                print("[camera_desktop] setMirror: connection does not support mirroring, ignoring mirror=\(mirrored)")
                 return
             }
             connection.automaticallyAdjustsVideoMirroring = false
@@ -594,7 +563,6 @@ class CameraSession: NSObject {
         _imageStreaming = false
         flagsLock.unlock()
 
-        print("[camera_desktop] Camera session disposed")
 
         // Null out the FFI callback under lock, guarantees no in-flight
         // invocation reaches Dart after this returns.
@@ -641,7 +609,6 @@ extension CameraSession: AVCaptureVideoDataOutputSampleBufferDelegate,
 
         // Video frame handling.
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-            print("[camera_desktop] captureOutput: CMSampleBufferGetImageBuffer returned nil — frame dropped")
             return
         }
 
@@ -659,7 +626,6 @@ extension CameraSession: AVCaptureVideoDataOutputSampleBufferDelegate,
             firstFrameReceived = true
             actualWidth = width
             actualHeight = height
-            print("[camera_desktop] First frame received: width=\(width) height=\(height)")
 
             DispatchQueue.main.async { [weak self] in
                 guard let self = self, let pending = self.pendingInitResult else { return }

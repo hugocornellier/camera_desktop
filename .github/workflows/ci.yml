@@ -85,7 +85,7 @@ jobs:
         shell: bash
         run: |
           grep -q '/utf-8' windows/CMakeLists.txt \
-            || { echo "::error::windows/CMakeLists.txt is missing /utf-8 — see chinese-pc-compat.md"; exit 1; }
+            || { echo "::error::windows/CMakeLists.txt is missing /utf-8"; exit 1; }
 
       - name: Verify ci/cp936_repro.cpp covers every non-ASCII char in windows/
         shell: bash
@@ -108,17 +108,17 @@ jobs:
           set CL_EXIT=%errorlevel%
           type cl.log
           if %CL_EXIT% equ 0 (
-            echo ::error::Expected C4819/C2220 but compile succeeded — CP936 simulation is not triggering the bug
+            echo ::error::Expected C4819/C2220 but compile succeeded, CP936 simulation is not triggering the bug
             exit /b 1
           )
           findstr /c:"C4819" cl.log >nul
           if errorlevel 1 (
-            echo ::error::cl.exe failed but did not emit C4819 — test is not reproducing the real bug
+            echo ::error::cl.exe failed but did not emit C4819, test is not reproducing the real bug
             exit /b 1
           )
           findstr /c:"C2220" cl.log >nul
           if errorlevel 1 (
-            echo ::error::cl.exe failed but did not emit C2220 — /WX promotion is not working as expected
+            echo ::error::cl.exe failed but did not emit C2220, /WX promotion is not working as expected
             exit /b 1
           )
           echo OK: CP936 simulation reproduced C4819/C2220 as expected
@@ -126,7 +126,7 @@ jobs:
 
       # Note: MSVC refuses `/source-charset:.936` together with `/utf-8`
       # (error D8016: options are incompatible). On a real Chinese Windows
-      # host, CP936 is NOT a flag — it's an implicit default from GetACP().
+      # host, CP936 is NOT a flag; it's an implicit default from GetACP().
       # `/utf-8` overrides that implicit default. We prove the fix in two
       # independent invocations: the previous step shows CP936 is hostile
       # to our bytes; this step shows `/utf-8` makes MSVC read them as UTF-8
@@ -151,7 +151,7 @@ jobs:
           fi
           echo "Inspecting: $vcxproj"
           if ! grep -q '/utf-8' "$vcxproj"; then
-            echo "::error::/utf-8 missing from $vcxproj — CMake did not thread the flag through"
+            echo "::error::/utf-8 missing from $vcxproj, CMake did not thread the flag through"
             echo "--- vcxproj contents ---"
             cat "$vcxproj"
             exit 1

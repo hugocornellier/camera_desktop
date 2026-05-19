@@ -34,7 +34,7 @@ def main() -> int:
         + list(pathlib.Path("windows").glob("*.h"))
     )
     if not windows_sources:
-        print("::error::No windows/*.cpp|*.h files found — run from repo root.")
+        print("::error::No windows/*.cpp|*.h files found, run from repo root.")
         return 1
 
     real: set[str] = set()

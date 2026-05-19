@@ -39,9 +39,7 @@ class DeviceEnumerator {
         }
 
         let result = sorted.map { $0.1 }
-        print("[camera_desktop] Device enumeration found \(result.count) camera(s)")
         for (device, _) in sorted {
-            print("[camera_desktop]   → \(device.localizedName) (uniqueID=\(device.uniqueID), position=\(device.position.rawValue))")
         }
         return result
     }

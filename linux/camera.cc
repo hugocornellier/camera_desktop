@@ -500,7 +500,7 @@ void Camera::TakePicture(FlMethodCall* method_call) {
                       capture_seq.fetch_add(1, std::memory_order_relaxed));
 
   // C-7: gst_video_convert_sample performs synchronous JPEG encoding which
-  // can take 30–200 ms at 1080p. Offload to a GLib thread-pool task so the
+  // can take 30-200 ms at 1080p. Offload to a GLib thread-pool task so the
   // main/UI thread is never blocked.
   //
   // Take a GStreamer reference to appsink_ so it stays alive for the duration

@@ -1,3 +1,8 @@
+## 1.1.4
+
+* Update documentation
+* Remove debug logging from image stream pause/resume and video recording completion
+
 ## 1.1.3
 
 * Fix Windows build failure (C4819 / C2220) on hosts with a non-UTF-8 system code page (e.g. CP936 on Simplified Chinese Windows) by compiling the plugin with `/utf-8` under MSVC (#2)
@@ -19,7 +24,7 @@
 * Request camera access via `org.freedesktop.portal.Camera` D-Bus interface
 * Enumerate PipeWire camera nodes via `GstDeviceMonitor`
 * Fall back to V4L2 if portal is unavailable or user denies permission
-* No new build dependencies — uses GIO (D-Bus) and GStreamer APIs already linked
+* No new build dependencies: uses GIO (D-Bus) and GStreamer APIs already linked
 
 ## 1.0.8
 

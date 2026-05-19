@@ -428,15 +428,8 @@ class CameraDesktopPlugin extends CameraPlatform {
         // Native has stopped, safe to release FFI resources.
         ffi?.dispose();
       },
-      onPause: () {
-        debugPrint(
-          '[camera_desktop] Warning: pausing image stream '
-          'subscription has no effect, native frames continue flowing.',
-        );
-      },
-      onResume: () {
-        debugPrint('[camera_desktop] Image stream subscription resumed.');
-      },
+      onPause: () {},
+      onResume: () {},
     );
 
     return controller.stream;
@@ -501,25 +494,6 @@ class CameraDesktopPlugin extends CameraPlatform {
         throw CameraException(
           'stopVideoRecording',
           'Native stopVideoRecording returned no output path.',
-        );
-      }
-      final width = map['width'] as int?;
-      final height = map['height'] as int?;
-      final fps = map['fps'] as int?;
-      final bitrate = map['bitrate'] as int?;
-      final container = map['container'] as String?;
-      final videoCodec = map['videoCodec'] as String?;
-      final audioCodec = map['audioCodec'] as String?;
-      if (width != null && height != null && fps != null && bitrate != null) {
-        debugPrint(
-          '[camera_desktop] Video recorded: ${width}x$height @ ${fps}fps, '
-          'bitrate=${bitrate}bps, path=$path',
-        );
-      }
-      if (container != null || videoCodec != null || audioCodec != null) {
-        debugPrint(
-          '[camera_desktop] Format: container=$container, '
-          'video=$videoCodec, audio=$audioCodec',
         );
       }
       return XFile(path);

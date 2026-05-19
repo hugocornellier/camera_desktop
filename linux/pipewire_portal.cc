@@ -182,7 +182,7 @@ void PipeWirePortal::OnPortalResponse(GDBusConnection* connection,
                                        gpointer user_data) {
   auto* self = static_cast<PipeWirePortal*>(user_data);
 
-  // Unsubscribe immediately — one-shot signal.
+  // Unsubscribe immediately (one-shot signal).
   if (self->signal_subscription_id_ > 0) {
     g_dbus_connection_signal_unsubscribe(connection,
                                          self->signal_subscription_id_);
