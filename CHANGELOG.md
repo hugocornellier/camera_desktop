@@ -1,3 +1,7 @@
+## 1.1.6
+
+* Fix Swift compiler warnings: remove unused variables in DeviceEnumerator, PhotoHandler, RecordHandler, and CameraSession
+
 ## 1.1.5
 
 * Fix SPM integration by adding missing FlutterFramework dependency to iOS and macOS Package.swift

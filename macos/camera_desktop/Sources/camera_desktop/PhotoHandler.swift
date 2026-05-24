@@ -8,8 +8,6 @@ class PhotoHandler {
     /// Takes a picture from the given pixel buffer and writes a JPEG to the output path.
     /// Returns true on success, false on failure.
     static func takePicture(from buffer: CVPixelBuffer, outputPath: String) -> Bool {
-        let width = CVPixelBufferGetWidth(buffer)
-        let height = CVPixelBufferGetHeight(buffer)
         let ciImage = CIImage(cvPixelBuffer: buffer)
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         guard let jpegData = ciContext.jpegRepresentation(

@@ -197,7 +197,6 @@ class RecordHandler: NSObject {
             if writer.status == .completed {
                 completion(path)
             } else {
-                let errorMsg = writer.error?.localizedDescription ?? "unknown error"
                 completion(nil)
             }
         }

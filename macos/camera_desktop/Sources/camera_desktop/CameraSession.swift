@@ -251,11 +251,9 @@ class CameraSession: NSObject {
         let desiredPreset = DeviceEnumerator.sessionPreset(for: config.resolutionPreset)
         let fallbackPresets: [AVCaptureSession.Preset] = [.hd1920x1080, .hd1280x720, .high, .medium]
         var chosenPreset: AVCaptureSession.Preset = .medium
-        var usedFallback = false
         if device.supportsSessionPreset(desiredPreset) && session.canSetSessionPreset(desiredPreset) {
             chosenPreset = desiredPreset
         } else {
-            usedFallback = true
             for fp in fallbackPresets {
                 if device.supportsSessionPreset(fp) && session.canSetSessionPreset(fp) {
                     chosenPreset = fp
@@ -371,8 +369,6 @@ class CameraSession: NSObject {
                        name: .AVCaptureSessionInterruptionEnded,
                        object: session)
 
-        let mirrorEnabled = vOutput.connection(with: .video)?.isVideoMirrored ?? false
-
         captureSession = session
         pendingInitResult = result
         firstFrameReceived = false
@@ -451,7 +447,7 @@ class CameraSession: NSObject {
 
         sessionQueue.async { [self] in
             do {
-                let path = try self.recordHandler.startRecording(
+                _ = try self.recordHandler.startRecording(
                     width: self.actualWidth,
                     height: self.actualHeight,
                     targetFps: self.config.targetFps,
@@ -480,8 +476,6 @@ class CameraSession: NSObject {
         }
 
         recordHandler.stopRecording { path in
-            if let path = path {
-            }
             DispatchQueue.main.async {
                 if let path = path {
                     result(path)

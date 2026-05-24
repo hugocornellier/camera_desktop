@@ -38,10 +38,7 @@ class DeviceEnumerator {
             return aScore < bScore
         }
 
-        let result = sorted.map { $0.1 }
-        for (device, _) in sorted {
-        }
-        return result
+        return sorted.map { $0.1 }
     }
 
     /// Returns a sort score for camera ordering.
