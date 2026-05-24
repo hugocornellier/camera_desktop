@@ -1,3 +1,7 @@
+## 1.1.5
+
+* Fix SPM integration by adding missing FlutterFramework dependency to iOS and macOS Package.swift
+
 ## 1.1.4
 
 * Update documentation

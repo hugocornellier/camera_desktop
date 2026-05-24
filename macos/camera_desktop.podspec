@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'camera_desktop'
-  s.version          = '1.1.4'
+  s.version          = '1.1.5'
   s.summary          = 'Flutter camera plugin for macOS using AVFoundation.'
   s.description      = <<-DESC
 A Flutter camera plugin for desktop platforms. On macOS, uses AVFoundation

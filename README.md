@@ -30,7 +30,7 @@ Add `camera_desktop` alongside `camera` in your `pubspec.yaml`:
 ```yaml
 dependencies:
   camera: ^0.11.0
-  camera_desktop: ^1.1.4
+  camera_desktop: ^1.1.5
 ```
 
 That's it. All three desktop platforms are covered, no additional packages needed.

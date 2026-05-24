@@ -8,7 +8,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  camera: ^0.11.0
+  camera: ^0.12.0
   camera_desktop:
     path: ../
   camera_platform_interface: ^2.8.0

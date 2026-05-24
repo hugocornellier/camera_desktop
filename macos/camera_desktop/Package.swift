@@ -10,11 +10,15 @@ let package = Package(
     products: [
         .library(name: "camera-desktop", targets: ["camera_desktop"])
     ],
-    dependencies: [],
+    dependencies: [
+        .package(name: "FlutterFramework", path: "../FlutterFramework")
+    ],
     targets: [
         .target(
             name: "camera_desktop",
-            dependencies: [],
+            dependencies: [
+                .product(name: "FlutterFramework", package: "FlutterFramework")
+            ],
             resources: [
                 .process("PrivacyInfo.xcprivacy"),
             ]
