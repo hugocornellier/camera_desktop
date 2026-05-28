@@ -105,44 +105,71 @@ void Camera::Initialize(FlMethodCall* method_call) {
 
 bool Camera::BuildPipeline(GError** error) {
   // Build pipeline with a tee to support branching for recording:
-  //   [source] ! videoconvert ! caps ! tee name=t
+  //   [source] ! videoconvert ! videoscale ! videorate ! caps ! tee name=t
   //     t. ! queue ! appsink (preview)
   //     t. ! [recording branch, added later by RecordHandler]
+  //
+  // videoscale/videorate let v4l2src negotiate a native mode (e.g. MJPEG or a
+  // lower YUYV resolution) instead of failing not-negotiated when the device
+  // cannot output the target size/fps in uncompressed YUV (common on USB cams).
+  const int w = config_.target_width;
+  const int h = config_.target_height;
+  const int fps = config_.target_fps;
+
+  gchar preview_tail[512];
+  g_snprintf(
+      preview_tail, sizeof(preview_tail),
+      "! videoflip name=flip method=horizontal-flip "
+      "! videoscale ! videorate "
+      "! video/x-raw,format=RGBA,width=%d,height=%d,framerate=%d/1 "
+      "! tee name=t "
+      "t. ! queue name=preview_queue ! "
+      "appsink name=sink emit-signals=true max-buffers=2 drop=true "
+      "sync=false",
+      w, h, fps);
+
   gchar* pipeline_str = nullptr;
 
   if (config_.backend == CameraBackend::kPipeWire) {
     // PipeWire portal path: use pipewiresrc with the portal-provided fd.
-    // Extract node id from "pw:<id>" device_path.
     std::string pw_node_id = config_.device_path.substr(3);
     pipeline_str = g_strdup_printf(
         "pipewiresrc fd=%d path=%s do-timestamp=true "
         "! videoconvert "
-        "! videoflip name=flip method=horizontal-flip "
-        "! video/x-raw,format=RGBA,width=%d,height=%d,framerate=%d/1 "
-        "! tee name=t "
-        "t. ! queue name=preview_queue ! "
-        "appsink name=sink emit-signals=true max-buffers=2 drop=true "
-        "sync=false",
-        config_.pw_fd, pw_node_id.c_str(),
-        config_.target_width, config_.target_height, config_.target_fps);
+        "%s",
+        config_.pw_fd, pw_node_id.c_str(), preview_tail);
   } else {
-    // V4L2 path (default for native Linux installs).
+    // V4L2: prefer MJPEG at the target size when available (native 720p@30 on
+    // many USB cameras); fall back to unconstrained capture + scale.
     pipeline_str = g_strdup_printf(
         "v4l2src device=%s "
-        "! videoconvert "
-        "! videoflip name=flip method=horizontal-flip "
-        "! video/x-raw,format=RGBA,width=%d,height=%d,framerate=%d/1 "
-        "! tee name=t "
-        "t. ! queue name=preview_queue ! "
-        "appsink name=sink emit-signals=true max-buffers=2 drop=true "
-        "sync=false",
-        config_.device_path.c_str(), config_.target_width,
-        config_.target_height, config_.target_fps);
+        "! image/jpeg,width=%d,height=%d,framerate=%d/1 "
+        "! jpegdec ! videoconvert "
+        "%s",
+        config_.device_path.c_str(), w, h, fps, preview_tail);
+    g_info("[camera_desktop] Pipeline: %s", pipeline_str);
+    pipeline_ = gst_parse_launch(pipeline_str, error);
+    g_free(pipeline_str);
+    pipeline_str = nullptr;
+
+    if (!pipeline_) {
+      if (error && *error) {
+        g_info("[camera_desktop] MJPEG pipeline unavailable: %s",
+               (*error)->message);
+        g_clear_error(error);
+      }
+      pipeline_str = g_strdup_printf("v4l2src device=%s "
+                                     "! videoconvert "
+                                     "%s",
+                                     config_.device_path.c_str(), preview_tail);
+    }
   }
 
-  g_info("[camera_desktop] Pipeline: %s", pipeline_str);
-  pipeline_ = gst_parse_launch(pipeline_str, error);
-  g_free(pipeline_str);
+  if (pipeline_str) {
+    g_info("[camera_desktop] Pipeline: %s", pipeline_str);
+    pipeline_ = gst_parse_launch(pipeline_str, error);
+    g_free(pipeline_str);
+  }
 
   if (!pipeline_) {
     return false;

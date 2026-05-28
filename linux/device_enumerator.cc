@@ -172,10 +172,17 @@ std::vector<ResolutionInfo> DeviceEnumerator::EnumerateResolutions(
       if (frmsize.type == V4L2_FRMSIZE_TYPE_DISCRETE) {
         int w = frmsize.discrete.width;
         int h = frmsize.discrete.height;
+        int fps = QueryMaxFps(fd, fmt.pixelformat, w, h);
         if (!seen.count({w, h})) {
           seen.insert({w, h});
-          int fps = QueryMaxFps(fd, fmt.pixelformat, w, h);
           resolutions.push_back({w, h, fps});
+        } else {
+          // Same resolution may appear in MJPEG and YUYV with different fps.
+          for (auto& r : resolutions) {
+            if (r.width == w && r.height == h && fps > r.max_fps) {
+              r.max_fps = fps;
+            }
+          }
         }
       } else if (frmsize.type == V4L2_FRMSIZE_TYPE_STEPWISE ||
                  frmsize.type == V4L2_FRMSIZE_TYPE_CONTINUOUS) {

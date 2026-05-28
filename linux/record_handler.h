@@ -9,7 +9,7 @@
 // Manages a video recording branch using a tee + valve + encoder + mux pipeline.
 //
 // Video pipeline:
-//   tee → queue → valve → videoconvert → encoder → mux → filesink
+//   tee → queue → valve → videoconvert → encoder → h264parse → mux → filesink
 //
 // Audio pipeline (optional, when enable_audio is true):
 //   autoaudiosrc → audioconvert → audioresample → opusenc → mux
@@ -71,6 +71,7 @@ class RecordHandler {
   GstElement* valve_;        // Owned by pipeline.
   GstElement* videoconvert_; // Owned by pipeline.
   GstElement* encoder_;      // Owned by pipeline.
+  GstElement* h264parse_;    // Owned by pipeline.
   GstElement* muxer_;        // Owned by pipeline.
   GstElement* filesink_;     // Owned by pipeline.
 

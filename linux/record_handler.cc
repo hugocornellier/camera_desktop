@@ -34,6 +34,7 @@ RecordHandler::RecordHandler()
       valve_(nullptr),
       videoconvert_(nullptr),
       encoder_(nullptr),
+      h264parse_(nullptr),
       muxer_(nullptr),
       filesink_(nullptr),
       audio_source_(nullptr),
@@ -100,6 +101,7 @@ bool RecordHandler::Setup(GstElement* pipeline, GstElement* tee,
   valve_ = gst_element_factory_make("valve", "rec_valve");
   videoconvert_ = gst_element_factory_make("videoconvert", "rec_convert");
   encoder_ = gst_element_factory_make(encoder_name_.c_str(), "rec_encoder");
+  h264parse_ = gst_element_factory_make("h264parse", "rec_h264parse");
 
   // H-6: prefer mp4mux so the output file is a genuine MP4 container.
   // Fall back to matroskamux if mp4mux is unavailable; the output extension
@@ -112,12 +114,16 @@ bool RecordHandler::Setup(GstElement* pipeline, GstElement* tee,
 
   filesink_ = gst_element_factory_make("filesink", "rec_filesink");
 
-  if (!queue_ || !valve_ || !videoconvert_ || !encoder_ ||
+  if (!queue_ || !valve_ || !videoconvert_ || !encoder_ || !h264parse_ ||
       !muxer_ || !filesink_) {
     g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
                 "Failed to create recording pipeline elements");
     return false;
   }
+
+  // mp4mux/matroskamux expect byte-stream H.264; encoders link only through
+  // h264parse (also sets stream-format for MP4).
+  g_object_set(h264parse_, "config-interval", 1, nullptr);
 
   // Configure the valve to start closed (dropping all data).
   g_object_set(valve_, "drop", TRUE, nullptr);
@@ -152,12 +158,12 @@ bool RecordHandler::Setup(GstElement* pipeline, GstElement* tee,
   }
 
   // Add all video elements to the pipeline.
-  gst_bin_add_many(GST_BIN(pipeline_), queue_, valve_,
-                   videoconvert_, encoder_, muxer_, filesink_, nullptr);
+  gst_bin_add_many(GST_BIN(pipeline_), queue_, valve_, videoconvert_,
+                   encoder_, h264parse_, muxer_, filesink_, nullptr);
 
-  // Link: queue → valve → videoconvert → encoder → muxer → filesink
-  if (!gst_element_link_many(queue_, valve_, videoconvert_,
-                             encoder_, muxer_, filesink_, nullptr)) {
+  // Link: queue → valve → videoconvert → encoder → h264parse → muxer → filesink
+  if (!gst_element_link_many(queue_, valve_, videoconvert_, encoder_,
+                             h264parse_, muxer_, filesink_, nullptr)) {
     g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
                 "Failed to link recording pipeline elements");
     return false;
@@ -181,6 +187,7 @@ bool RecordHandler::Setup(GstElement* pipeline, GstElement* tee,
   gst_element_sync_state_with_parent(valve_);
   gst_element_sync_state_with_parent(videoconvert_);
   gst_element_sync_state_with_parent(encoder_);
+  gst_element_sync_state_with_parent(h264parse_);
   gst_element_sync_state_with_parent(muxer_);
   gst_element_sync_state_with_parent(filesink_);
 
