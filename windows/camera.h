@@ -44,9 +44,12 @@ struct CameraConfig {
 
 class Camera : public std::enable_shared_from_this<Camera> {
  public:
+  using PlatformTaskPoster = std::function<void(std::function<void()>)>;
+
   Camera(int camera_id, flutter::TextureRegistrar* texture_registrar,
          flutter::MethodChannel<flutter::EncodableValue>* channel,
-         CameraConfig config);
+         CameraConfig config,
+         PlatformTaskPoster platform_task_poster);
   ~Camera();
 
   int64_t RegisterTexture();
@@ -109,6 +112,7 @@ class Camera : public std::enable_shared_from_this<Camera> {
 
   flutter::TextureRegistrar*                           texture_registrar_;
   flutter::MethodChannel<flutter::EncodableValue>*     channel_;
+  PlatformTaskPoster                                   platform_task_poster_;
   std::unique_ptr<CameraTexture>                       texture_;
 
   // ── Capture engine + D3D11 ─────────────────────────────────────────────

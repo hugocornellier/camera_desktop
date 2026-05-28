@@ -18,6 +18,50 @@
 
 CameraDesktopPlugin* CameraDesktopPlugin::instance_ = nullptr;
 
+// ---------------------------------------------------------------------------
+// TaskDispatcher
+// ---------------------------------------------------------------------------
+
+static const UINT kWmTask = WM_APP + 100;
+static const wchar_t kTaskWndClass[] = L"CameraDesktopTaskDispatcher";
+
+TaskDispatcher::TaskDispatcher() {
+  WNDCLASSEX wc = {};
+  wc.cbSize        = sizeof(wc);
+  wc.lpfnWndProc   = &TaskDispatcher::WndProc;
+  wc.hInstance     = GetModuleHandle(nullptr);
+  wc.lpszClassName = kTaskWndClass;
+  RegisterClassEx(&wc);  // Ignore failure; already-registered is fine.
+
+  hwnd_ = CreateWindowEx(0, kTaskWndClass, nullptr, 0,
+                         0, 0, 0, 0, HWND_MESSAGE, nullptr,
+                         GetModuleHandle(nullptr), nullptr);
+}
+
+TaskDispatcher::~TaskDispatcher() {
+  if (hwnd_) {
+    DestroyWindow(hwnd_);
+    hwnd_ = nullptr;
+  }
+}
+
+void TaskDispatcher::Post(std::function<void()> task) {
+  if (!hwnd_) return;
+  PostMessage(hwnd_, kWmTask, 0,
+              reinterpret_cast<LPARAM>(new std::function<void()>(std::move(task))));
+}
+
+LRESULT CALLBACK TaskDispatcher::WndProc(HWND hwnd, UINT msg,
+                                          WPARAM wparam, LPARAM lparam) {
+  if (msg == kWmTask) {
+    auto* task = reinterpret_cast<std::function<void()>*>(lparam);
+    (*task)();
+    delete task;
+    return 0;
+  }
+  return DefWindowProc(hwnd, msg, wparam, lparam);
+}
+
 int64_t camera_desktop_ffi_register_stream_handle(Camera* camera);
 void camera_desktop_ffi_release_stream_handle(int64_t stream_handle);
 void camera_desktop_ffi_release_handles_for_camera(Camera* camera);
@@ -64,7 +108,9 @@ void CameraDesktopPlugin::RegisterWithRegistrar(
 CameraDesktopPlugin::CameraDesktopPlugin(
     flutter::PluginRegistrarWindows* registrar,
     std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> channel)
-    : registrar_(registrar), channel_(std::move(channel)) {}
+    : registrar_(registrar),
+      channel_(std::move(channel)),
+      task_dispatcher_(std::make_unique<TaskDispatcher>()) {}
 
 CameraDesktopPlugin::~CameraDesktopPlugin() {
   shutting_down_ = true;
@@ -273,11 +319,16 @@ void CameraDesktopPlugin::HandleCreate(
 
   int camera_id = next_camera_id_++;
   DebugLog("HandleCreate: assigning camera_id=" + std::to_string(camera_id));
+  TaskDispatcher* dispatcher = task_dispatcher_.get();
+  Camera::PlatformTaskPoster poster = [dispatcher](std::function<void()> task) {
+    dispatcher->Post(std::move(task));
+  };
   auto camera = std::make_shared<Camera>(
       camera_id,
       registrar_->texture_registrar(),
       channel_.get(),
-      config);
+      config,
+      std::move(poster));
 
   int64_t texture_id = camera->RegisterTexture();
   if (texture_id < 0) {

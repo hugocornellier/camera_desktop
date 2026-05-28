@@ -2,12 +2,29 @@
 
 #include <flutter/method_channel.h>
 #include <flutter/plugin_registrar_windows.h>
+#include <windows.h>
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
 
 #include "camera.h"
+
+// Marshals arbitrary work to the Win32 message-loop thread (the Flutter
+// platform thread) via a hidden message-only HWND.  Must be constructed on
+// the platform thread; Post() is thread-safe.
+class TaskDispatcher {
+ public:
+  TaskDispatcher();
+  ~TaskDispatcher();
+  void Post(std::function<void()> task);
+
+ private:
+  static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg,
+                                   WPARAM wparam, LPARAM lparam);
+  HWND hwnd_ = nullptr;
+};
 
 class CameraDesktopPlugin : public flutter::Plugin {
  public:
@@ -75,6 +92,7 @@ class CameraDesktopPlugin : public flutter::Plugin {
 
   flutter::PluginRegistrarWindows* registrar_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> channel_;
+  std::unique_ptr<TaskDispatcher> task_dispatcher_;
   mutable std::mutex cameras_mutex_;
   std::map<int, std::shared_ptr<Camera>> cameras_;
   int next_camera_id_ = 1;

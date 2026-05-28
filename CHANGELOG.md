@@ -1,3 +1,7 @@
+## 1.1.7
+
+* Fix Windows crash: platform channel messages (cameraClosing, cameraError, imageStreamFrame) are now marshalled to the platform thread via a Win32 message-only window, resolving the non-platform-thread violation after camera dispose (#4)
+
 ## 1.1.6
 
 * Fix Swift compiler warnings: remove unused variables in DeviceEnumerator, PhotoHandler, RecordHandler, and CameraSession

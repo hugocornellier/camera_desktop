@@ -196,10 +196,12 @@ std::string CameraStateStr(CameraState s) {
 
 Camera::Camera(int camera_id, flutter::TextureRegistrar* texture_registrar,
                flutter::MethodChannel<flutter::EncodableValue>* channel,
-               CameraConfig config)
+               CameraConfig config,
+               PlatformTaskPoster platform_task_poster)
     : camera_id_(camera_id),
       texture_registrar_(texture_registrar),
       channel_(channel),
+      platform_task_poster_(std::move(platform_task_poster)),
       config_(std::move(config)) {}
 
 Camera::~Camera() {
@@ -1188,6 +1190,8 @@ void Camera::PostImageStreamFrame(const uint8_t* data, int width, int height) {
 
 void Camera::ImageStreamLoop() {
   CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+  auto* channel = channel_;
+  const int camera_id = camera_id_;
 
   while (image_stream_running_.load()) {
     ImageStreamSlot local;
@@ -1201,18 +1205,21 @@ void Camera::ImageStreamLoop() {
       image_stream_slot_.dirty = false;
     }
 
-    channel_->InvokeMethod(
-        "imageStreamFrame",
-        std::make_unique<flutter::EncodableValue>(flutter::EncodableMap{
-            {flutter::EncodableValue("cameraId"),
-             flutter::EncodableValue(camera_id_)},
-            {flutter::EncodableValue("width"),
-             flutter::EncodableValue(local.width)},
-            {flutter::EncodableValue("height"),
-             flutter::EncodableValue(local.height)},
-            {flutter::EncodableValue("bytes"),
-             flutter::EncodableValue(local.data)},
-        }));
+    platform_task_poster_(
+        [channel, camera_id, local = std::move(local)]() mutable {
+          channel->InvokeMethod(
+              "imageStreamFrame",
+              std::make_unique<flutter::EncodableValue>(flutter::EncodableMap{
+                  {flutter::EncodableValue("cameraId"),
+                   flutter::EncodableValue(camera_id)},
+                  {flutter::EncodableValue("width"),
+                   flutter::EncodableValue(local.width)},
+                  {flutter::EncodableValue("height"),
+                   flutter::EncodableValue(local.height)},
+                  {flutter::EncodableValue("bytes"),
+                   flutter::EncodableValue(local.data)},
+              }));
+        });
   }
 
   CoUninitialize();
@@ -1241,14 +1248,18 @@ void Camera::ResumePreview() {
 // ============================================================================
 
 void Camera::SendError(const std::string& description) {
-  channel_->InvokeMethod(
-      "cameraError",
-      std::make_unique<flutter::EncodableValue>(flutter::EncodableMap{
-          {flutter::EncodableValue("cameraId"),
-           flutter::EncodableValue(camera_id_)},
-          {flutter::EncodableValue("description"),
-           flutter::EncodableValue(description)},
-      }));
+  auto* channel = channel_;
+  int camera_id = camera_id_;
+  platform_task_poster_([channel, camera_id, description]() {
+    channel->InvokeMethod(
+        "cameraError",
+        std::make_unique<flutter::EncodableValue>(flutter::EncodableMap{
+            {flutter::EncodableValue("cameraId"),
+             flutter::EncodableValue(camera_id)},
+            {flutter::EncodableValue("description"),
+             flutter::EncodableValue(description)},
+        }));
+  });
 }
 
 // ============================================================================
@@ -1373,12 +1384,18 @@ void Camera::DisposeInternal() {
     texture_.reset();
   }
 
-  channel_->InvokeMethod(
-      "cameraClosing",
-      std::make_unique<flutter::EncodableValue>(flutter::EncodableMap{
-          {flutter::EncodableValue("cameraId"),
-           flutter::EncodableValue(camera_id_)},
-      }));
+  {
+    auto* channel = channel_;
+    int camera_id = camera_id_;
+    platform_task_poster_([channel, camera_id]() {
+      channel->InvokeMethod(
+          "cameraClosing",
+          std::make_unique<flutter::EncodableValue>(flutter::EncodableMap{
+              {flutter::EncodableValue("cameraId"),
+               flutter::EncodableValue(camera_id)},
+          }));
+    });
+  }
 
   {
     std::lock_guard<std::mutex> lk(state_mutex_);
