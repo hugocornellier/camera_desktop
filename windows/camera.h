@@ -44,7 +44,8 @@ struct CameraConfig {
 
 class Camera : public std::enable_shared_from_this<Camera> {
  public:
-  using PlatformTaskPoster = std::function<void(std::function<void()>)>;
+  using PlatformTaskPoster =
+      std::function<void(std::function<void()>, const char* tag)>;
 
   Camera(int camera_id, flutter::TextureRegistrar* texture_registrar,
          flutter::MethodChannel<flutter::EncodableValue>* channel,

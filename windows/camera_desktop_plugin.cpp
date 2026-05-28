@@ -36,6 +36,10 @@ TaskDispatcher::TaskDispatcher() {
   hwnd_ = CreateWindowEx(0, kTaskWndClass, nullptr, 0,
                          0, 0, 0, 0, HWND_MESSAGE, nullptr,
                          GetModuleHandle(nullptr), nullptr);
+  platform_thread_id_ = GetCurrentThreadId();
+  DebugLog("TaskDispatcher: created on platform thread=" +
+           std::to_string(platform_thread_id_) +
+           " hwnd=" + (hwnd_ ? "ok" : "FAILED"));
 }
 
 TaskDispatcher::~TaskDispatcher() {
@@ -45,18 +49,43 @@ TaskDispatcher::~TaskDispatcher() {
   }
 }
 
-void TaskDispatcher::Post(std::function<void()> task) {
-  if (!hwnd_) return;
-  PostMessage(hwnd_, kWmTask, 0,
-              reinterpret_cast<LPARAM>(new std::function<void()>(std::move(task))));
+struct TaskDispatcherItem {
+  std::function<void()> task;
+  std::string tag;
+  DWORD caller_thread_id;
+};
+
+void TaskDispatcher::Post(std::function<void()> task, const char* tag) {
+  if (!hwnd_) {
+    DebugLog("TaskDispatcher::Post DROPPED (no hwnd) tag=" +
+             std::string(tag ? tag : "?") +
+             " thread=" + std::to_string(GetCurrentThreadId()));
+    return;
+  }
+  auto* item = new TaskDispatcherItem{
+      std::move(task),
+      tag ? tag : "?",
+      GetCurrentThreadId()};
+  if (!PostMessage(hwnd_, kWmTask, 0, reinterpret_cast<LPARAM>(item))) {
+    DebugLog("TaskDispatcher::Post PostMessage FAILED tag=" + item->tag +
+             " thread=" + std::to_string(item->caller_thread_id));
+    delete item;
+  }
 }
 
 LRESULT CALLBACK TaskDispatcher::WndProc(HWND hwnd, UINT msg,
                                           WPARAM wparam, LPARAM lparam) {
   if (msg == kWmTask) {
-    auto* task = reinterpret_cast<std::function<void()>*>(lparam);
-    (*task)();
-    delete task;
+    auto* item = reinterpret_cast<TaskDispatcherItem*>(lparam);
+    DWORD exec_thread = GetCurrentThreadId();
+    // Only log non-imageStreamFrame to avoid 30fps spam.
+    if (item->tag != std::string("imageStreamFrame")) {
+      DebugLog("TaskDispatcher dispatch tag=" + item->tag +
+               " posted-from-thread=" + std::to_string(item->caller_thread_id) +
+               " executing-on-thread=" + std::to_string(exec_thread));
+    }
+    item->task();
+    delete item;
     return 0;
   }
   return DefWindowProc(hwnd, msg, wparam, lparam);
@@ -320,8 +349,9 @@ void CameraDesktopPlugin::HandleCreate(
   int camera_id = next_camera_id_++;
   DebugLog("HandleCreate: assigning camera_id=" + std::to_string(camera_id));
   TaskDispatcher* dispatcher = task_dispatcher_.get();
-  Camera::PlatformTaskPoster poster = [dispatcher](std::function<void()> task) {
-    dispatcher->Post(std::move(task));
+  Camera::PlatformTaskPoster poster = [dispatcher](std::function<void()> task,
+                                                    const char* tag) {
+    dispatcher->Post(std::move(task), tag);
   };
   auto camera = std::make_shared<Camera>(
       camera_id,

@@ -18,12 +18,13 @@ class TaskDispatcher {
  public:
   TaskDispatcher();
   ~TaskDispatcher();
-  void Post(std::function<void()> task);
+  void Post(std::function<void()> task, const char* tag = nullptr);
 
  private:
   static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg,
                                    WPARAM wparam, LPARAM lparam);
   HWND hwnd_ = nullptr;
+  DWORD platform_thread_id_ = 0;
 };
 
 class CameraDesktopPlugin : public flutter::Plugin {

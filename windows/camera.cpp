@@ -1219,7 +1219,7 @@ void Camera::ImageStreamLoop() {
                   {flutter::EncodableValue("bytes"),
                    flutter::EncodableValue(local.data)},
               }));
-        });
+        }, "imageStreamFrame");
   }
 
   CoUninitialize();
@@ -1259,7 +1259,7 @@ void Camera::SendError(const std::string& description) {
             {flutter::EncodableValue("description"),
              flutter::EncodableValue(description)},
         }));
-  });
+  }, "cameraError");
 }
 
 // ============================================================================
@@ -1394,7 +1394,7 @@ void Camera::DisposeInternal() {
               {flutter::EncodableValue("cameraId"),
                flutter::EncodableValue(camera_id)},
           }));
-    });
+    }, "cameraClosing");
   }
 
   {
