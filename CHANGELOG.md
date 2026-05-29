@@ -1,6 +1,9 @@
 ## 1.1.7
 
-* Fix Windows crash: platform channel messages (cameraClosing, cameraError, imageStreamFrame) are now marshalled to the platform thread via a Win32 message-only window, resolving the non-platform-thread violation after camera dispose (#4)
+* Fix Windows crash after camera dispose by marshalling platform channel messages to the platform thread (#4)
+* Fix Linux preview `not-negotiated` error on common USB webcams (#5, thanks @jvnonce)
+* Fix Linux recording on systems without `x264enc` (#5, thanks @jvnonce)
+* Report max frame rate across all pixel formats during Linux device enumeration (#5, thanks @jvnonce)
 
 ## 1.1.6
 
