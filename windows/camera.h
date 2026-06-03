@@ -115,6 +115,10 @@ class Camera : public std::enable_shared_from_this<Camera> {
   flutter::MethodChannel<flutter::EncodableValue>*     channel_;
   PlatformTaskPoster                                   platform_task_poster_;
   std::unique_ptr<CameraTexture>                       texture_;
+  // Guards texture_ against concurrent teardown: preview samples arrive on an
+  // MF callback thread and touch texture_, while DisposeInternal frees it on
+  // the dispose thread. See CRASH.md.
+  std::mutex                                           texture_mutex_;
 
   // ── Capture engine + D3D11 ─────────────────────────────────────────────
   ComPtr<IMFCaptureEngine>      capture_engine_;

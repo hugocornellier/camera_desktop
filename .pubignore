@@ -1,0 +1,12 @@
+# Build / tooling artifacts
+.dart_tool/
+build/
+.idea/
+*.iml
+
+# Dev/CI helper scripts, not needed by package consumers.
+ci/
+
+# Example Podfile (not needed in the published tarball).
+example/**/Podfile
+example/**/Podfile.lock

@@ -1,3 +1,7 @@
+## 1.1.8
+
+* Fix a Windows use-after-free crash on camera dispose by guarding the preview texture against in-flight Media Foundation preview samples (#4)
+
 ## 1.1.7
 
 * Fix Windows crash after camera dispose by marshalling platform channel messages to the platform thread (#4)

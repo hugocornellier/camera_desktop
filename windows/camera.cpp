@@ -838,10 +838,17 @@ void Camera::OnPreviewSample(IMFSample* sample) {
   // P7b: R↔B swap → mirrored RGBA for Flutter texture.
   SwapRBChannels(data, cur_w, cur_h);
 
-  // Update preview texture.
-  if (!preview_paused_.load()) {
-    texture_->Update(data, cur_w, cur_h);
-    texture_registrar_->MarkTextureFrameAvailable(texture_id_);
+  // Update preview texture. Hold texture_mutex_ so an in-flight sample can't
+  // deref a texture_ that DisposeInternal is freeing concurrently (see CRASH.md).
+  {
+    std::lock_guard<std::mutex> lk(texture_mutex_);
+    if (!texture_) {
+      DebugLog("OnPreviewSample: texture_ freed during teardown, dropping frame "
+               "(dispose race caught)");
+    } else if (!preview_paused_.load()) {
+      texture_->Update(data, cur_w, cur_h);
+      texture_registrar_->MarkTextureFrameAvailable(texture_id_);
+    }
   }
 
   // Image stream.
@@ -1378,10 +1385,14 @@ void Camera::DisposeInternal() {
     }
   }
 
-  // Texture.
-  if (texture_) {
-    texture_->Unregister();
-    texture_.reset();
+  // Texture. Hold texture_mutex_ so we don't free texture_ while an in-flight
+  // preview sample on an MF thread is still using it (see CRASH.md).
+  {
+    std::lock_guard<std::mutex> lk(texture_mutex_);
+    if (texture_) {
+      texture_->Unregister();
+      texture_.reset();
+    }
   }
 
   {
