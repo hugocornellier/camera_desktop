@@ -213,7 +213,7 @@ Camera::~Camera() {
 // ============================================================================
 
 int64_t Camera::RegisterTexture() {
-  texture_ = std::make_unique<CameraTexture>(texture_registrar_);
+  texture_ = std::make_shared<CameraTexture>(texture_registrar_);
   texture_id_ = texture_->Register();
   return texture_id_;
 }
@@ -1385,12 +1385,23 @@ void Camera::DisposeInternal() {
     }
   }
 
-  // Texture. Hold texture_mutex_ so we don't free texture_ while an in-flight
-  // preview sample on an MF thread is still using it (see CRASH.md).
+  // Texture teardown. Two hazards, both guarded here (see CRASH.md):
+  //   1) texture_mutex_ stops an in-flight OnPreviewSample (MF thread) from using
+  //      texture_ while we drop it.
+  //   2) Flutter's UnregisterTexture is ASYNC: it posts the real removal to the
+  //      raster thread, which can still invoke the pixel-buffer callback on the
+  //      CameraTexture afterward. So we must NOT destroy it synchronously. Instead
+  //      unregister with a completion callback and keep the object alive (via a
+  //      captured shared_ptr) until Flutter confirms removal on the raster thread.
   {
     std::lock_guard<std::mutex> lk(texture_mutex_);
     if (texture_) {
-      texture_->Unregister();
+      std::shared_ptr<CameraTexture> keepalive = texture_;
+      texture_->UnregisterAsync([keepalive]() mutable {
+        // Runs on the raster thread once Flutter has removed the texture. Releasing
+        // the captured shared_ptr here is what makes destroying CameraTexture safe.
+        keepalive.reset();
+      });
       texture_.reset();
     }
   }

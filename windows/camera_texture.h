@@ -3,6 +3,7 @@
 #include <flutter/texture_registrar.h>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -29,6 +30,12 @@ class CameraTexture {
 
   // Unregisters the texture from Flutter.
   void Unregister();
+
+  // Asynchronously unregisters the texture; |on_done| runs once Flutter has removed
+  // it (on the raster thread). The caller MUST keep this object alive until then,
+  // because Flutter's pixel-buffer callback can still fire on the raster thread after
+  // an ordinary Unregister() returns. See CRASH.md.
+  void UnregisterAsync(std::function<void()> on_done);
 
   int64_t texture_id() const { return texture_id_; }
 

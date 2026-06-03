@@ -87,3 +87,17 @@ void CameraTexture::Unregister() {
   }
   texture_variant_.reset();
 }
+
+void CameraTexture::UnregisterAsync(std::function<void()> on_done) {
+  if (texture_id_ >= 0 && registrar_) {
+    DebugLog("CameraTexture::UnregisterAsync: texture_id=" +
+             std::to_string(texture_id_));
+    // Async overload: Flutter removes the texture on the raster thread and only
+    // then invokes |on_done|. Until that point the engine may still call the
+    // pixel-buffer callback, so the object must stay alive (caller holds it).
+    registrar_->UnregisterTexture(texture_id_, std::move(on_done));
+    texture_id_ = -1;
+  } else if (on_done) {
+    on_done();
+  }
+}

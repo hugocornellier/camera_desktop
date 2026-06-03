@@ -1,6 +1,6 @@
 ## 1.1.8
 
-* Fix a Windows use-after-free crash on camera dispose by guarding the preview texture against in-flight Media Foundation preview samples (#4)
+* Fix Windows use-after-free crashes on camera dispose: guard the preview texture against in-flight preview samples, and defer destroying the texture until Flutter's asynchronous `UnregisterTexture` completes (its raster-thread pixel-buffer callback could otherwise run after the texture was freed) (#4)
 
 ## 1.1.7
 
