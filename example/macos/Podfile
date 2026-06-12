@@ -39,4 +39,24 @@ post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_macos_build_settings(target)
   end
+
+  # media_kit_video ships an xcconfig where GCC_PREPROCESSOR_DEFINITIONS contains
+  # "$(inherited)" twice, which expands the build-config macros (POD_CONFIGURATION_*,
+  # DEBUG) twice and triggers "macro redefined" warnings. Strip the duplicate.
+  Dir.glob(File.join(installer.sandbox.root, '**', '*.xcconfig')).each do |xcconfig|
+    contents = File.read(xcconfig)
+    fixed = contents.gsub(/^(GCC_PREPROCESSOR_DEFINITIONS\s*=\s*)(.*)$/) do
+      prefix, value = $1, $2
+      seen_inherited = false
+      tokens = value.split(/\s+/).reject do |tok|
+        if tok == '$(inherited)' || tok == '"$(inherited)"'
+          next true if seen_inherited
+          seen_inherited = true
+        end
+        false
+      end
+      "#{prefix}#{tokens.join(' ')}"
+    end
+    File.write(xcconfig, fixed) if fixed != contents
+  end
 end

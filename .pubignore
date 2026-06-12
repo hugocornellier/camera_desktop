@@ -10,3 +10,6 @@ ci/
 # Example Podfile (not needed in the published tarball).
 example/**/Podfile
 example/**/Podfile.lock
+
+# Internal working notes, not for the published package.
+NEW_SUPPORT_ROADMAP.md
