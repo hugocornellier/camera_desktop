@@ -139,25 +139,26 @@ bool Camera::BuildPipeline(GError** error) {
         "%s",
         config_.pw_fd, pw_node_id.c_str(), preview_tail);
   } else {
-    // V4L2: prefer MJPEG at the target size when available (native 720p@30 on
-    // many USB cameras); fall back to unconstrained capture + scale.
-    pipeline_str = g_strdup_printf(
-        "v4l2src device=%s "
-        "! image/jpeg,width=%d,height=%d,framerate=%d/1 "
-        "! jpegdec ! videoconvert "
-        "%s",
-        config_.device_path.c_str(), w, h, fps, preview_tail);
-    g_info("[camera_desktop] Pipeline: %s", pipeline_str);
-    pipeline_ = gst_parse_launch(pipeline_str, error);
-    g_free(pipeline_str);
-    pipeline_str = nullptr;
-
-    if (!pipeline_) {
-      if (error && *error) {
-        g_info("[camera_desktop] MJPEG pipeline unavailable: %s",
-               (*error)->message);
-        g_clear_error(error);
-      }
+    // V4L2: prefer MJPEG at the target size when the device actually supports
+    // it (native 720p/1080p on many USB cameras, and the only way some can
+    // deliver high resolutions within USB 2.0 bandwidth). The choice must be
+    // probed up front: gst_parse_launch() succeeds even for an MJPEG pipeline
+    // the camera cannot satisfy, so a non-MJPEG camera would otherwise fail at
+    // PLAYING with a runtime "not-negotiated" error instead of falling back.
+    // Only width/height are pinned on the MJPEG caps; the native frame rate is
+    // left to float and the downstream videorate adapts it to the target fps,
+    // so requesting an fps the camera does not offer natively in MJPEG does not
+    // break negotiation. Cameras exposing only raw formats (e.g. NV12/YUYV) use
+    // the unconstrained capture + scale path, which negotiates any native mode
+    // and adapts it to the target via videoscale/videorate.
+    if (DeviceEnumerator::SupportsMjpeg(config_.device_path, w, h)) {
+      pipeline_str = g_strdup_printf(
+          "v4l2src device=%s "
+          "! image/jpeg,width=%d,height=%d "
+          "! jpegdec ! videoconvert "
+          "%s",
+          config_.device_path.c_str(), w, h, preview_tail);
+    } else {
       pipeline_str = g_strdup_printf("v4l2src device=%s "
                                      "! videoconvert "
                                      "%s",

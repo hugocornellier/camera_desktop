@@ -45,6 +45,19 @@ class DeviceEnumerator {
   static ResolutionInfo SelectResolution(
       const std::vector<ResolutionInfo>& resolutions,
       int preset);
+
+  // Returns true if |device_path| can deliver motion-JPEG (either
+  // V4L2_PIX_FMT_MJPEG or the older V4L2_PIX_FMT_JPEG) at the given
+  // width/height. Used to decide between an MJPEG and a raw capture pipeline
+  // BEFORE building it: gst_parse_launch() succeeds even for an MJPEG pipeline
+  // the camera cannot satisfy, so the choice must be probed up front rather
+  // than inferred from a parse failure that never happens. Frame rate is not
+  // checked because the MJPEG pipeline lets the native rate float and adapts it
+  // downstream with videorate; pinning a specific source fps would spuriously
+  // reject cameras that offer the size at a different native rate. Returns false
+  // on any uncertainty so callers fall back to the always-safe raw capture path.
+  static bool SupportsMjpeg(const std::string& device_path, int width,
+                            int height);
 };
 
 #endif  // DEVICE_ENUMERATOR_H_

@@ -222,6 +222,70 @@ std::vector<ResolutionInfo> DeviceEnumerator::EnumerateResolutions(
   return resolutions;
 }
 
+// Returns true if |pixel_format| on |fd| offers |width|x|height| as a discrete
+// size or within a stepwise/continuous range. Conservative: returns false if
+// the size is not advertised. Frame rate is intentionally not checked here; see
+// SupportsMjpeg.
+static bool FormatSupportsSize(int fd, __u32 pixel_format, int width,
+                               int height) {
+  struct v4l2_frmsizeenum frmsize;
+  memset(&frmsize, 0, sizeof(frmsize));
+  frmsize.pixel_format = pixel_format;
+  frmsize.index = 0;
+
+  while (ioctl(fd, VIDIOC_ENUM_FRAMESIZES, &frmsize) == 0) {
+    if (frmsize.type == V4L2_FRMSIZE_TYPE_DISCRETE) {
+      if ((int)frmsize.discrete.width == width &&
+          (int)frmsize.discrete.height == height) {
+        return true;
+      }
+    } else if (frmsize.type == V4L2_FRMSIZE_TYPE_STEPWISE ||
+               frmsize.type == V4L2_FRMSIZE_TYPE_CONTINUOUS) {
+      // One entry for stepwise/continuous; the size is in range or it is not.
+      return width >= (int)frmsize.stepwise.min_width &&
+             width <= (int)frmsize.stepwise.max_width &&
+             height >= (int)frmsize.stepwise.min_height &&
+             height <= (int)frmsize.stepwise.max_height;
+    }
+    frmsize.index++;
+  }
+  return false;
+}
+
+bool DeviceEnumerator::SupportsMjpeg(const std::string& device_path,
+                                     int width, int height) {
+  int fd = open(device_path.c_str(), O_RDONLY | O_NONBLOCK);
+  if (fd < 0) {
+    return false;
+  }
+
+  bool supported = false;
+  struct v4l2_fmtdesc fmt;
+  memset(&fmt, 0, sizeof(fmt));
+  fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+  fmt.index = 0;
+
+  while (ioctl(fd, VIDIOC_ENUM_FMT, &fmt) == 0) {
+    // Cameras advertise motion-JPEG as either V4L2_PIX_FMT_MJPEG or the older
+    // V4L2_PIX_FMT_JPEG; GStreamer's image/jpeg + jpegdec decodes both. Only the
+    // target size must be offered: the MJPEG pipeline pins width/height but lets
+    // the native frame rate float, and the downstream videorate adapts it to the
+    // requested fps (the same way the raw-capture path does).
+    if ((fmt.pixelformat == V4L2_PIX_FMT_MJPEG ||
+         fmt.pixelformat == V4L2_PIX_FMT_JPEG) &&
+        FormatSupportsSize(fd, fmt.pixelformat, width, height)) {
+      supported = true;
+      break;
+    }
+    fmt.index++;
+  }
+
+  close(fd);
+  g_info("[camera_desktop] SupportsMjpeg(%s, %dx%d) = %s",
+         device_path.c_str(), width, height, supported ? "true" : "false");
+  return supported;
+}
+
 ResolutionInfo DeviceEnumerator::SelectResolution(
     const std::vector<ResolutionInfo>& resolutions,
     int preset) {

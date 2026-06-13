@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'camera_desktop'
-  s.version          = '1.2.0'
+  s.version          = '1.2.1'
   s.summary          = 'Flutter camera plugin (iOS stub).'
   s.description      = <<-DESC
 Flutter camera plugin for desktop platforms. iOS stub for platform declaration.
