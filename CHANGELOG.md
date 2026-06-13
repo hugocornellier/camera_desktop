@@ -1,3 +1,8 @@
+## 1.2.0
+
+* Speed up Windows camera initialization by completing `initialize()` as soon as the preview starts instead of blocking until the first camera frame arrives. On a typical webcam this returns control to the app in roughly 250 ms rather than about 2 seconds. The preview fills in as frames arrive, and a watchdog reports a `cameraError` if no frames are received within 8 seconds.
+* Make Windows diagnostic logging opt-in and off by default so the plugin stays quiet in your app. Set the `CAMERA_DESKTOP_LOG` environment variable to any value other than `0` to capture a trace when reporting an issue. This also removes the logging overhead that slowed camera initialization, most noticeably with a debugger or IDE attached.
+
 ## 1.1.8
 
 * Fix Windows use-after-free crashes on camera dispose: guard the preview texture against in-flight preview samples, and defer destroying the texture until Flutter's asynchronous `UnregisterTexture` completes (its raster-thread pixel-buffer callback could otherwise run after the texture was freed) (#4)

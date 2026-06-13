@@ -11,6 +11,7 @@
 #include <wrl/client.h>
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <functional>
 #include <memory>
@@ -99,6 +100,7 @@ class Camera : public std::enable_shared_from_this<Camera> {
 
   void DisposeInternal();
   void SendError(const std::string& description);
+  int  InitElapsedMs() const;
 
   static void FlipHorizontal(uint8_t* data, int width, int height);
   static void SwapRBChannels(uint8_t* data, int width, int height);
@@ -166,6 +168,9 @@ class Camera : public std::enable_shared_from_this<Camera> {
       pending_start_record_;
   std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
       pending_stop_record_;
+
+  // ── Init timing (diagnostics) ───────────────────────────────────────────
+  std::chrono::steady_clock::time_point create_start_{};
 
   // ── Initialisation timeout ──────────────────────────────────────────────
   std::thread             init_timeout_thread_;

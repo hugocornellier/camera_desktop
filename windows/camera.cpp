@@ -94,6 +94,14 @@ class PreviewSampleCallback final
 
 namespace {
 
+// When false, FindBestMediaType logs only a per-call header and an aggregate
+// summary instead of one line per rejected device media type. Some webcams
+// expose 100+ modes (every resolution x every integer fps); logging each
+// rejection (an OutputDebugString plus a flushed stderr write) dominated camera
+// init time, especially under an attached debugger/IDE. Flip to true for full
+// per-mode diagnostics.
+constexpr bool kVerboseMediaTypeLog = false;
+
 // Finds the best available device media type for the given stream that is
 // at or below max_height and at or above min_framerate.
 // Prefers higher resolution; among equal resolutions, higher frame rate.
@@ -110,6 +118,7 @@ bool FindBestMediaType(DWORD stream_index, IMFCaptureSource* source,
   uint32_t best_w = 0, best_h = 0;
   float best_fps = 0.0f;
   int examined = 0;
+  int rej_no_rate = 0, rej_fps = 0, rej_no_size = 0, rej_height = 0;
 
   for (int i = 0;; ++i) {
     ComPtr<IMFMediaType> type;
@@ -120,28 +129,36 @@ bool FindBestMediaType(DWORD stream_index, IMFCaptureSource* source,
     UINT32 num = 0, den = 1;
     if (FAILED(MFGetAttributeRatio(type.Get(), MF_MT_FRAME_RATE, &num, &den)) ||
         den == 0) {
-      DebugLog("FindBestMediaType: type[" + std::to_string(i) +
-               "] rejected (no frame rate attribute)");
+      ++rej_no_rate;
+      if (kVerboseMediaTypeLog)
+        DebugLog("FindBestMediaType: type[" + std::to_string(i) +
+                 "] rejected (no frame rate attribute)");
       continue;
     }
     float fps = static_cast<float>(num) / static_cast<float>(den);
     if (fps < min_framerate) {
-      DebugLog("FindBestMediaType: type[" + std::to_string(i) +
-               "] rejected (fps=" + std::to_string(fps) +
-               " < min=" + std::to_string(min_framerate) + ")");
+      ++rej_fps;
+      if (kVerboseMediaTypeLog)
+        DebugLog("FindBestMediaType: type[" + std::to_string(i) +
+                 "] rejected (fps=" + std::to_string(fps) +
+                 " < min=" + std::to_string(min_framerate) + ")");
       continue;
     }
 
     UINT32 w = 0, h = 0;
     if (FAILED(MFGetAttributeSize(type.Get(), MF_MT_FRAME_SIZE, &w, &h))) {
-      DebugLog("FindBestMediaType: type[" + std::to_string(i) +
-               "] rejected (no frame size attribute)");
+      ++rej_no_size;
+      if (kVerboseMediaTypeLog)
+        DebugLog("FindBestMediaType: type[" + std::to_string(i) +
+                 "] rejected (no frame size attribute)");
       continue;
     }
     if (h > max_height) {
-      DebugLog("FindBestMediaType: type[" + std::to_string(i) + "] " +
-               std::to_string(w) + "x" + std::to_string(h) +
-               " rejected (height > max " + std::to_string(max_height) + ")");
+      ++rej_height;
+      if (kVerboseMediaTypeLog)
+        DebugLog("FindBestMediaType: type[" + std::to_string(i) + "] " +
+                 std::to_string(w) + "x" + std::to_string(h) +
+                 " rejected (height > max " + std::to_string(max_height) + ")");
       continue;
     }
 
@@ -154,7 +171,10 @@ bool FindBestMediaType(DWORD stream_index, IMFCaptureSource* source,
   }
 
   DebugLog("FindBestMediaType: examined " + std::to_string(examined) +
-           " type(s), best=" +
+           " type(s) (rejected " + std::to_string(rej_fps) + " fps, " +
+           std::to_string(rej_height) + " height, " +
+           std::to_string(rej_no_rate) + " no-rate, " +
+           std::to_string(rej_no_size) + " no-size), best=" +
            (best ? std::to_string(best_w) + "x" + std::to_string(best_h) +
                        "@" + std::to_string(static_cast<int>(best_fps + 0.5f)) + "fps"
                  : "none"));
@@ -261,7 +281,14 @@ int Camera::ComputeDefaultBitrate(int width, int height, int fps) const {
 // Engine creation  (runs on a background thread)
 // ============================================================================
 
+int Camera::InitElapsedMs() const {
+  return static_cast<int>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - create_start_).count());
+}
+
 HRESULT Camera::CreateCaptureEngine() {
+  create_start_ = std::chrono::steady_clock::now();
   // Create the engine class factory.
   ComPtr<IMFCaptureEngineClassFactory> factory;
   HRESULT hr = CoCreateInstance(CLSID_MFCaptureEngineClassFactory, nullptr,
@@ -317,6 +344,8 @@ HRESULT Camera::CreateCaptureEngine() {
       DebugLog("CreateCaptureEngine: D3D11CreateDevice failed " + HrToString(d3d_hr) + ", using software path");
     }
   }
+  DebugLog("init-timing: +" + std::to_string(InitElapsedMs()) +
+           "ms after D3D11 device setup");
 
   // Video-only flag.
   attrs->SetUINT32(MF_CAPTURE_ENGINE_USE_VIDEO_DEVICE_ONLY,
@@ -343,6 +372,8 @@ HRESULT Camera::CreateCaptureEngine() {
     DebugLog("CreateCaptureEngine: MFCreateDeviceSource video failed " + HrToString(hr));
     return hr;
   }
+  DebugLog("init-timing: +" + std::to_string(InitElapsedMs()) +
+           "ms after MFCreateDeviceSource (camera opened)");
 
   // Audio device source, best-effort (non-fatal).
   ComPtr<IMFMediaSource> audio_source;
@@ -420,6 +451,8 @@ HRESULT Camera::CreateCaptureEngine() {
   } else {
     DebugLog("CreateCaptureEngine: Initialize called successfully (async, awaiting INITIALIZED event)");
   }
+  DebugLog("init-timing: +" + std::to_string(InitElapsedMs()) +
+           "ms after engine Initialize() issued (async)");
   return hr;
 }
 
@@ -614,10 +647,34 @@ void Camera::Initialize(
         bool timed_out = !self->init_timeout_cancel_cv_.wait_for(
             lk, std::chrono::seconds(8),
             [self] { return self->init_timeout_cancelled_; });
+        lk.unlock();
         if (timed_out) {
-          DebugLog("Camera::Initialize: timeout, no frames received");
-          self->CompleteInit(false,
-                             "Camera initialization timed out, no frames received");
+          // initialize() normally returns at StartPreview. What the 8s deadline
+          // means depends on how far init actually got:
+          //   kInitializing: the engine accepted Initialize() but never fired
+          //     INITIALIZED or ERROR (a silent stall, e.g. the device was
+          //     unplugged mid-init or the driver deadlocked). pending_init_ is
+          //     still outstanding, so fail it rather than let initialize() hang
+          //     indefinitely (restores the pre-1.2.0 watchdog behavior).
+          //   kRunning with no frame yet: init already succeeded at StartPreview,
+          //     so surface a runtime cameraError instead.
+          // CompleteInit moves pending_init_ out under pending_mutex_ and no-ops
+          // if it is already gone, so a late INITIALIZED racing in here is safe.
+          CameraState st;
+          {
+            std::lock_guard<std::mutex> state_lk(self->state_mutex_);
+            st = self->state_;
+          }
+          if (st == CameraState::kInitializing) {
+            DebugLog("Camera::Initialize: timed out in kInitializing, no engine "
+                     "event received");
+            self->CompleteInit(false, "Camera initialization timed out");
+          } else if (st == CameraState::kRunning &&
+                     !self->first_frame_received_.load()) {
+            DebugLog("Camera::Initialize: started but no frames within 8s, "
+                     "signaling cameraError");
+            self->SendError("Camera started but no frames were received");
+          }
         }
       }
       CoUninitialize();
@@ -676,18 +733,35 @@ void Camera::OnEngineEvent(IMFMediaEvent* event) {
       return;
     }
     DebugLog("Camera::OnEngineEvent INITIALIZED");
+    DebugLog("init-timing: +" + std::to_string(InitElapsedMs()) +
+             "ms engine INITIALIZED event received");
 
     HRESULT hr = FindBaseMediaTypes();
     if (FAILED(hr)) {
       CompleteInit(false, "Failed to enumerate camera media types");
       return;
     }
+    DebugLog("init-timing: +" + std::to_string(InitElapsedMs()) +
+             "ms media types negotiated");
 
     hr = StartPreviewInternal();
     if (FAILED(hr)) {
       CompleteInit(false, "Failed to start camera preview");
+      return;
     }
-    // Actual init completion is deferred until the first preview sample.
+
+    // Complete initialization now instead of waiting for the first preview
+    // sample. Preview dimensions are already known from negotiation, and
+    // blocking on frame #1 added ~1.9s of camera sensor warm-up to initialize().
+    // Frames populate the texture as they arrive; the init timeout becomes a
+    // watchdog that signals a cameraError if no frames ever show up.
+    {
+      std::lock_guard<std::mutex> lk(state_mutex_);
+      if (state_ == CameraState::kInitializing) state_ = CameraState::kRunning;
+    }
+    DebugLog("init-timing: +" + std::to_string(InitElapsedMs()) +
+             "ms StartPreview issued, init completed (not waiting for frame #1)");
+    CompleteInit(true, "", preview_width_, preview_height_);
     return;
   }
 
@@ -860,6 +934,8 @@ void Camera::OnPreviewSample(IMFSample* sample) {
   if (!first_frame_received_.exchange(true)) {
     DebugLog("Camera::OnPreviewSample first frame " +
              std::to_string(cur_w) + "x" + std::to_string(cur_h));
+    DebugLog("init-timing: +" + std::to_string(InitElapsedMs()) +
+             "ms first frame received (init already completed at StartPreview)");
 
     // Cancel init timeout.
     {
