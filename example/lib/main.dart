@@ -21,9 +21,18 @@ class CameraExampleApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const MaterialApp(
+    return MaterialApp(
       title: 'Camera Desktop Example',
-      home: CameraExamplePage(),
+      // Workaround for an upstream Flutter Linux freeze (flutter/flutter#153560,
+      // still open): the GTK/AT-SPI accessibility bridge blocks the UI thread on
+      // a synchronous D-Bus call while walking the semantics tree when an
+      // AT-SPI client is active (e.g. on settings changes here). Wrapping the
+      // Navigator in ExcludeSemantics prunes the app's accessibility tree —
+      // including overlay routes like dropdown popups — which avoids the hang.
+      // Trade-off: in-app screen-reader support is disabled. Remove this once
+      // the upstream bug is fixed if you need accessibility.
+      builder: (context, child) => ExcludeSemantics(child: child!),
+      home: const CameraExamplePage(),
     );
   }
 }
