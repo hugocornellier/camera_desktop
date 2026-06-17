@@ -106,7 +106,7 @@ First stable release of `camera_desktop`
 * Live camera preview with hardware-accelerated texture rendering on all platforms
 * Photo capture, video recording, and real-time image streaming
 * FFI-based zero-copy frame delivery (MethodChannel fallback for compatibility)
-* Configurable resolution presets, FPS (5–60), and video bitrate
+* Configurable resolution presets, FPS (5-60), and video bitrate
 * Mirror/flip control (macOS and Linux)
 * Pause/resume preview
 * Runtime capability querying via `getPlatformCapabilities()`
