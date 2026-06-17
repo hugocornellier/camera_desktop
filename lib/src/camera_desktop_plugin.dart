@@ -96,6 +96,20 @@ class CameraDesktopPlugin extends CameraPlatform {
   final Map<int, StreamController<CameraImageData>> _imageStreamControllers =
       {};
 
+  /// Active image streams (FFI or fallback) keyed by cameraId.
+  ///
+  /// Lets [dispose] tear down a stream whose subscription was never cancelled —
+  /// e.g. when an app disposes its `CameraController` without first calling
+  /// `stopImageStream()`. In that case `onCancel` never fires, so without this
+  /// the FFI poll timer (and its controller) would leak and keep polling.
+  final Map<int, _ActiveImageStream> _activeImageStreams = {};
+
+  /// Factory for the FFI image-stream poller. Overridable in tests to inject a
+  /// fake (or capture the real) poller without depending on call timing.
+  @visibleForTesting
+  ImageStreamPoller? Function(int streamHandle) imageStreamPollerFactory =
+      ImageStreamFfi.tryCreate;
+
   /// Handles method calls from the native side (events pushed to Dart).
   ///
   /// Dispatches `cameraError`, `cameraClosing`, and `imageStreamFrame`
@@ -261,6 +275,15 @@ class CameraDesktopPlugin extends CameraPlatform {
   /// cleanup always completes.
   @override
   Future<void> dispose(int cameraId) async {
+    // Stop any active image-stream poller BEFORE native dispose. This prevents
+    // a leaked 8ms poll timer when the stream subscription was never cancelled
+    // (CameraController.dispose() does not stop image streams), and ensures no
+    // Dart poll reads a shared buffer the native side is about to free.
+    final active = _activeImageStreams.remove(cameraId);
+    if (active != null) {
+      active.tornDown = true;
+      active.ffi?.stop();
+    }
     try {
       await _channel.invokeMethod<void>('dispose', {'cameraId': cameraId});
     } on PlatformException catch (_) {
@@ -269,6 +292,12 @@ class CameraDesktopPlugin extends CameraPlatform {
       final imageController = _imageStreamControllers.remove(cameraId);
       if (imageController != null && !imageController.isClosed) {
         imageController.close();
+      }
+      if (active != null) {
+        active.ffi?.dispose();
+        if (!active.controller.isClosed) {
+          await active.controller.close();
+        }
       }
     }
   }
@@ -397,18 +426,29 @@ class CameraDesktopPlugin extends CameraPlatform {
       return cameraId;
     }
 
-    ImageStreamFfi? ffi;
+    ImageStreamPoller? ffi;
     int streamHandle = cameraId;
     late final StreamController<CameraImageData> controller;
 
     controller = StreamController<CameraImageData>(
       onListen: () async {
+        // Register the active stream up front so a concurrent dispose() can
+        // find and tear it down even while startImageStream is still in flight.
+        final active = _ActiveImageStream(controller);
+        _activeImageStreams[cameraId] = active;
+
         final dynamic value = await _channel.invokeMethod<dynamic>(
           'startImageStream',
           {'cameraId': cameraId},
         );
         streamHandle = extractStreamHandle(value);
-        ffi = ImageStreamFfi.tryCreate(streamHandle);
+
+        // dispose() may have run while we awaited startImageStream. If so, do
+        // not start polling — the camera is already being torn down.
+        if (active.tornDown) return;
+
+        ffi = imageStreamPollerFactory(streamHandle);
+        active.ffi = ffi;
         if (ffi == null) {
           _imageStreamControllers[cameraId] = controller;
         } else {
@@ -416,15 +456,27 @@ class CameraDesktopPlugin extends CameraPlatform {
         }
       },
       onCancel: () async {
+        final active = _activeImageStreams.remove(cameraId);
+        // If dispose() already took over teardown, it owns the native stop and
+        // FFI cleanup. Just ensure the local poller is stopped and bail, so we
+        // never call stopImageStream on an already-disposed camera.
+        if (active == null || active.tornDown) {
+          ffi?.stop();
+          ffi?.dispose();
+          return;
+        }
+
         // Unregister the native callback first so no new frames are dispatched.
         ffi?.stop();
         _imageStreamControllers.remove(cameraId);
-        // Tell native to stop streaming; await ensures the native side has
-        // fully stopped before we dispose the FFI poller.
-        await _channel.invokeMethod<void>('stopImageStream', {
-          'cameraId': cameraId,
-          'streamHandle': streamHandle,
-        });
+        // Tell native to stop streaming. Wrapped defensively: the camera may
+        // have been disposed between the check above and this call.
+        try {
+          await _channel.invokeMethod<void>('stopImageStream', {
+            'cameraId': cameraId,
+            'streamHandle': streamHandle,
+          });
+        } on PlatformException catch (_) {}
         // Native has stopped, safe to release FFI resources.
         ffi?.dispose();
       },
@@ -614,4 +666,20 @@ class CameraDesktopPlugin extends CameraPlatform {
       'Switching camera during recording is not supported on desktop.',
     );
   }
+}
+
+/// Tracks a single active image stream so [CameraDesktopPlugin.dispose] can tear
+/// it down even when its subscription was never cancelled.
+class _ActiveImageStream {
+  _ActiveImageStream(this.controller);
+
+  /// The controller backing the camera's image stream.
+  final StreamController<CameraImageData> controller;
+
+  /// The FFI poller, if the FFI fast path is active (null on the fallback path).
+  ImageStreamPoller? ffi;
+
+  /// Set once [CameraDesktopPlugin.dispose] has taken over teardown, so
+  /// `onListen`/`onCancel` know not to start polling or to double-stop native.
+  bool tornDown = false;
 }

@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:ffi';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:camera_platform_interface/camera_platform_interface.dart';
+import 'package:flutter/foundation.dart';
 
 /// FFI struct matching the native ImageStreamBuffer layout (32-byte header).
 ///
@@ -73,6 +73,19 @@ typedef _UnregisterCallbackNative = Void Function(Int64 streamHandle);
 /// Dart-side function type for [_UnregisterCallbackNative].
 typedef _UnregisterCallbackDart = void Function(int streamHandle);
 
+/// Minimal interface for an image-stream frame poller, so the plugin can hold
+/// either a real [ImageStreamFfi] or a test fake.
+abstract interface class ImageStreamPoller {
+  /// Begins delivering frames to [controller].
+  void start(StreamController<CameraImageData> controller);
+
+  /// Stops delivering frames (cancels the poll timer).
+  void stop();
+
+  /// Releases all resources.
+  void dispose();
+}
+
 /// Manages FFI-based image stream for a single camera.
 ///
 /// Instead of receiving frame data through MethodChannel serialization
@@ -81,7 +94,7 @@ typedef _UnregisterCallbackDart = void Function(int streamHandle);
 ///
 /// If FFI setup fails (symbols not found, library not loadable), returns
 /// null from [tryCreate] and the caller falls back to MethodChannel.
-class ImageStreamFfi {
+class ImageStreamFfi implements ImageStreamPoller {
   ImageStreamFfi._(
     this._streamHandle,
     this._getBuffer,
@@ -121,6 +134,11 @@ class ImageStreamFfi {
 
   /// The sequence number of the last frame delivered, used to skip duplicates.
   int _lastSequence = 0;
+
+  /// Number of poll ticks executed since [start]. Test/diagnostic hook used to
+  /// verify the poller actually stops after the stream is torn down.
+  @visibleForTesting
+  int pollCount = 0;
 
   /// Attempts to set up the FFI image stream.
   ///
@@ -182,6 +200,7 @@ class ImageStreamFfi {
   ///
   /// Using a native callback symbol (instead of [NativeCallable.listener])
   /// avoids stale Dart callback metadata crashes during hot restart.
+  @override
   void start(StreamController<CameraImageData> controller) {
     _controller = controller;
     _lastSequence = 0;
@@ -198,6 +217,7 @@ class ImageStreamFfi {
 
   /// Polls for one new frame and emits it if sequence has advanced.
   void _pollForFrame() {
+    pollCount++;
     if (_pollInProgress) return;
     _pollInProgress = true;
     try {
@@ -256,6 +276,7 @@ class ImageStreamFfi {
   }
 
   /// Unregisters the native callback.
+  @override
   void stop() {
     _pollTimer?.cancel();
     _pollTimer = null;
@@ -263,6 +284,7 @@ class ImageStreamFfi {
   }
 
   /// Releases all resources.
+  @override
   void dispose() {
     stop();
     _controller = null;

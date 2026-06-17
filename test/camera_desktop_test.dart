@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:camera_platform_interface/camera_platform_interface.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
@@ -251,11 +253,54 @@ void main() {
       expect(await plugin.getExposureOffsetStepSize(1), 0.0);
     });
 
+    test('imageStreamPollerFactory default is ImageStreamFfi.tryCreate', () {
+      // Sanity: the seam defaults to the real FFI factory in production.
+      expect(plugin.imageStreamPollerFactory(1), isNull); // null in tests
+    });
+
     test('ImageStreamFfi.tryCreate returns null in test environment', () {
       // In the test environment, no native library is loaded, so FFI
       // symbol lookup should fail and tryCreate should return null.
       final ffi = ImageStreamFfi.tryCreate(1);
       expect(ffi, isNull);
+    });
+
+    test('dispose tears down an FFI stream whose subscription was never '
+        'cancelled', () async {
+      // Inject a fake poller so the FFI fast path is exercised without a
+      // native library. Mirrors what happens on a real device when an app
+      // disposes its CameraController without first calling stopImageStream().
+      final fake = _FakeImageStreamPoller();
+      plugin.imageStreamPollerFactory = (_) => fake;
+
+      const description = CameraDescription(
+        name: 'Test Camera (/dev/video0)',
+        lensDirection: CameraLensDirection.external,
+        sensorOrientation: 0,
+      );
+      final cameraId = await plugin.createCameraWithSettings(
+        description,
+        const MediaSettings(resolutionPreset: ResolutionPreset.high),
+      );
+
+      // Start streaming but DO NOT cancel the subscription.
+      final subscription =
+          plugin.onStreamedFrameAvailable(cameraId).listen((_) {});
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+      expect(fake.started, isTrue, reason: 'poller should be started');
+      expect(fake.stopped, isFalse);
+
+      // Dispose the camera without cancelling the stream subscription.
+      await plugin.dispose(cameraId);
+
+      // The fix: dispose must tear the poller down so its timer does not leak.
+      expect(fake.stopped, isTrue,
+          reason: 'dispose must stop the orphaned poller');
+      expect(fake.disposed, isTrue,
+          reason: 'dispose must dispose the orphaned poller');
+
+      await subscription.cancel();
     });
 
     test('onStreamedFrameAvailable uses MethodChannel fallback when FFI '
@@ -282,4 +327,26 @@ void main() {
       expect(log.last.method, 'stopImageStream');
     });
   });
+}
+
+/// Test double for [ImageStreamPoller] that records lifecycle calls.
+class _FakeImageStreamPoller implements ImageStreamPoller {
+  bool started = false;
+  bool stopped = false;
+  bool disposed = false;
+
+  @override
+  void start(StreamController<CameraImageData> controller) {
+    started = true;
+  }
+
+  @override
+  void stop() {
+    stopped = true;
+  }
+
+  @override
+  void dispose() {
+    disposed = true;
+  }
 }

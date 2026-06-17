@@ -247,8 +247,11 @@ public class CameraDesktopPlugin: NSObject, FlutterPlugin, NSApplicationDelegate
                 ImageStreamHandleBridge.releaseHandle(Int64(streamHandleInt))
             }
         }
-        session.stopImageStream()
-        result(nil)
+        // Reply only after the native buffer free has actually completed, so
+        // Dart's `await stopImageStream` resolves once the memory is reclaimed.
+        session.stopImageStream {
+            result(nil)
+        }
     }
 
     private func handlePausePreview(call: FlutterMethodCall, result: @escaping FlutterResult) {

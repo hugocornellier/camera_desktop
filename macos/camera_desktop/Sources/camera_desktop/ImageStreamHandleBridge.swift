@@ -1,19 +1,19 @@
 import Foundation
 
-typealias ImageStreamCallback = @convention(c) (Int32) -> Void
+public typealias ImageStreamCallback = @convention(c) (Int32) -> Void
 
 @_cdecl("camera_desktop_image_stream_noop_callback")
-private func cameraDesktopImageStreamNoopCallback(_ cameraId: Int32) {
+public func cameraDesktopImageStreamNoopCallback(_ cameraId: Int32) {
     _ = cameraId
 }
 
 @_cdecl("camera_desktop_get_image_stream_buffer")
-private func cameraDesktopGetImageStreamBuffer(_ streamHandle: Int64) -> UnsafeMutableRawPointer? {
+public func cameraDesktopGetImageStreamBuffer(_ streamHandle: Int64) -> UnsafeMutableRawPointer? {
     ImageStreamHandleBridge.getImageStreamBuffer(forHandle: streamHandle)
 }
 
 @_cdecl("camera_desktop_register_image_stream_callback")
-private func cameraDesktopRegisterImageStreamCallback(
+public func cameraDesktopRegisterImageStreamCallback(
     _ streamHandle: Int64,
     _ callback: ImageStreamCallback?
 ) {
@@ -22,7 +22,7 @@ private func cameraDesktopRegisterImageStreamCallback(
 }
 
 @_cdecl("camera_desktop_unregister_image_stream_callback")
-private func cameraDesktopUnregisterImageStreamCallback(_ streamHandle: Int64) {
+public func cameraDesktopUnregisterImageStreamCallback(_ streamHandle: Int64) {
     ImageStreamHandleBridge.unregisterImageStreamCallback(forHandle: streamHandle)
 }
 
