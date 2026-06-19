@@ -125,7 +125,7 @@ No additional setup required.
 | Live preview | Yes | Yes | Yes |
 | Photo capture | Yes | Yes | Yes |
 | Video recording | Yes | Yes | Yes |
-| Image streaming | Yes | Yes | No |
+| Image streaming | Yes | Yes | Yes |
 | Audio recording | Yes | Yes | Yes |
 | Resolution presets | Yes | Yes | Yes |
 | Custom FPS | Yes | Yes | Yes |
