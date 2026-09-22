@@ -90,7 +90,8 @@ void main() {
       expect(
         pollsAfterWait,
         equals(pollsAtDispose),
-        reason: 'after dispose the poll timer MUST be stopped; before the fix '
+        reason:
+            'after dispose the poll timer MUST be stopped; before the fix '
             'it keeps firing ~125x/sec forever',
       );
 

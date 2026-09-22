@@ -284,8 +284,9 @@ void main() {
       );
 
       // Start streaming but DO NOT cancel the subscription.
-      final subscription =
-          plugin.onStreamedFrameAvailable(cameraId).listen((_) {});
+      final subscription = plugin
+          .onStreamedFrameAvailable(cameraId)
+          .listen((_) {});
       await Future<void>.delayed(Duration.zero);
       await Future<void>.delayed(Duration.zero);
       expect(fake.started, isTrue, reason: 'poller should be started');
@@ -295,10 +296,16 @@ void main() {
       await plugin.dispose(cameraId);
 
       // The fix: dispose must tear the poller down so its timer does not leak.
-      expect(fake.stopped, isTrue,
-          reason: 'dispose must stop the orphaned poller');
-      expect(fake.disposed, isTrue,
-          reason: 'dispose must dispose the orphaned poller');
+      expect(
+        fake.stopped,
+        isTrue,
+        reason: 'dispose must stop the orphaned poller',
+      );
+      expect(
+        fake.disposed,
+        isTrue,
+        reason: 'dispose must dispose the orphaned poller',
+      );
 
       await subscription.cancel();
     });
