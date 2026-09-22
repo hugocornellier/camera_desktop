@@ -104,12 +104,22 @@ class DeviceEnumerator {
             return (Int(dims.width), Int(dims.height))
         }
         // Fallback based on preset
+        if let target = targetDimensions(for: preset) {
+            return (Int(target.width), Int(target.height))
+        }
+        return (1280, 720)
+    }
+
+    /// Frame size a session preset stands for, following the sizes the Flutter
+    /// camera plugin documents for each ResolutionPreset. Nil keeps the device's
+    /// own format.
+    static func targetDimensions(for preset: AVCaptureSession.Preset) -> (width: Int32, height: Int32)? {
         switch preset {
         case .low: return (320, 240)
-        case .medium: return (480, 360)
-        case .hd1280x720: return (1280, 720)
+        case .medium: return (640, 480)
+        case .high, .hd1280x720: return (1280, 720)
         case .hd1920x1080: return (1920, 1080)
-        default: return (1280, 720)
+        default: return nil
         }
     }
 }

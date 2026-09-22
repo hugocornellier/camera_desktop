@@ -210,6 +210,32 @@ class CameraSession: NSObject {
         session.addOutput(vOutput)
         videoOutput = vOutput
 
+        // macOS keeps the device's active format (1920x1080 on a MacBook Pro
+        // camera) whatever the session preset, and frames arrive at that size.
+        // Select the smallest landscape native format that covers the preset,
+        // and ask the output for the preset's exact size where none matches.
+        var heldForFormat = false
+        if let target = DeviceEnumerator.targetDimensions(for: chosenPreset) {
+            let fitting = device.formats.filter {
+                let dims = CMVideoFormatDescriptionGetDimensions($0.formatDescription)
+                return dims.width >= dims.height && dims.width >= target.width && dims.height >= target.height
+            }
+            let area: (AVCaptureDevice.Format) -> Int32 = {
+                let dims = CMVideoFormatDescriptionGetDimensions($0.formatDescription)
+                return dims.width * dims.height
+            }
+            if let best = fitting.min(by: { area($0) < area($1) }),
+               (try? device.lockForConfiguration()) != nil {
+                device.activeFormat = best
+                heldForFormat = true
+            }
+            vOutput.videoSettings = [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferWidthKey as String: Int(target.width),
+                kCVPixelBufferHeightKey as String: Int(target.height),
+            ]
+        }
+
         // Mirror at the capture source so all consumers get mirrored frames.
         if let connection = vOutput.connection(with: .video) {
             if connection.isVideoMirroringSupported {
@@ -250,6 +276,8 @@ class CameraSession: NSObject {
 
         // Start running, the first frame callback will respond to the pending result.
         session.startRunning()
+        // Held until now: starting the session otherwise re-applies the preset's format.
+        if heldForFormat { device.unlockForConfiguration() }
 
         // Timeout: if no frame arrives in 15 seconds, fail.
         DispatchQueue.main.asyncAfter(deadline: .now() + 15.0) { [weak self] in
