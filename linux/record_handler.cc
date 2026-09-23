@@ -170,7 +170,11 @@ bool RecordHandler::Setup(GstElement* pipeline, GstElement* tee,
   }
 
   // Link tee to the recording queue.
-  GstPad* tee_pad = gst_element_request_pad_simple(tee_, "src_%u");
+  #if GST_CHECK_VERSION(1, 20, 0)
+    GstPad* tee_pad = gst_element_request_pad_simple(tee_, "src_%u");
+  #else
+    GstPad* tee_pad = gst_element_get_request_pad(tee_, "src_%u");
+  #endif
   GstPad* queue_pad = gst_element_get_static_pad(queue_, "sink");
   GstPadLinkReturn link_ret = gst_pad_link(tee_pad, queue_pad);
   gst_object_unref(queue_pad);
@@ -257,8 +261,13 @@ bool RecordHandler::SetupAudioBranch(int audio_bitrate, GError** error) {
 
   // Link audio encoder to the muxer.
   GstPad* audio_src = gst_element_get_static_pad(audio_encoder_, "src");
-  GstPad* mux_audio_sink =
-      gst_element_request_pad_simple(muxer_, "audio_%u");
+  #if GST_CHECK_VERSION(1, 20, 0)
+    GstPad* mux_audio_sink =
+          gst_element_request_pad_simple(muxer_, "audio_%u");
+  #else
+    GstPad* mux_audio_sink =
+          gst_element_get_request_pad(muxer_, "audio_%u");
+  #endif
   if (!audio_src || !mux_audio_sink) {
     g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
                 "Failed to get audio pads for muxer");
