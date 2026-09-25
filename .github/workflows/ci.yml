@@ -285,4 +285,4 @@ jobs:
       - name: Plugin and fake camera log
         if: always()
         shell: bash
-        run: grep -E "camera_desktop/windows|stream-format-test" e2e.log | tail -120 || true
+        run: grep -E "camera_desktop/windows|stream-format-test|error C[0-9]|error LNK|warning C[0-9]" e2e.log | tail -120 || true
