@@ -103,7 +103,7 @@ void main() {
         '[stream-format-test] $path ${frame.width}x${frame.height} '
         'bytesPerRow=${plane.bytesPerRow} centre byte means '
         '[b0,b1,b2,b3]=$mean '
-        'group=${frame.format.group.name} raw=${frame.format.raw}',
+        'group=${frame.format.group} raw=${frame.format.raw}',
       );
 
       expect(frame.format.group, ImageFormatGroup.bgra8888);

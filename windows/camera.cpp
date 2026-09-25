@@ -10,6 +10,7 @@
 #include <cstring>
 #include <sstream>
 
+#include "fake_camera_source.h"
 #include "logging.h"
 #include "photo_handler.h"
 #include "pixel_utils.h"
@@ -368,6 +369,11 @@ HRESULT Camera::CreateCaptureEngine() {
   if (FAILED(hr)) return hr;
 
   ComPtr<IMFMediaSource> video_source;
+#ifdef CAMERA_DESKTOP_FAKE_CAMERA
+  if (config_.symbolic_link == kFakeCameraSymbolicLink) {
+    hr = CreateFakeCameraSource(&video_source);
+  } else
+#endif
   hr = MFCreateDeviceSource(vid_attrs.Get(), &video_source);
   if (FAILED(hr)) {
     DebugLog("CreateCaptureEngine: MFCreateDeviceSource video failed " + HrToString(hr));

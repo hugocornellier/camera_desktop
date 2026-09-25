@@ -251,3 +251,38 @@ jobs:
       - name: Feeder log
         if: always()
         run: cat feeder.log || true
+
+  # End-to-end image stream check on Windows without a webcam: the plugin is
+  # built with a test-only fake camera (solid red YUY2 frames, see
+  # windows/fake_camera_source.h) that feeds the real Media Foundation capture
+  # engine, and the integration test asserts the streamed bytes are really
+  # BGRA (red in byte 2) on both the FFI and MethodChannel paths.
+  test-windows-stream-e2e:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      CAMERA_DESKTOP_FAKE_CAMERA: "1"
+      CAMERA_DESKTOP_LOG: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Media Foundation diagnostics
+        shell: pwsh
+        run: |
+          (Get-CimInstance Win32_OperatingSystem).Caption
+          "mfplat.dll present: " + (Test-Path C:\Windows\System32\mfplat.dll)
+          "mfcore.dll present: " + (Test-Path C:\Windows\System32\mfcore.dll)
+      - name: Run the stream format integration test
+        shell: bash
+        run: |
+          set -o pipefail
+          cd example
+          flutter test integration_test/image_stream_format_test.dart \
+            -d windows --dart-define=EXPECT_RED_CAMERA=true -v 2>&1 \
+            | tee ../e2e.log | grep -E "stream-format-test|tests passed|failed|Error|Exception"
+      - name: Plugin and fake camera log
+        if: always()
+        shell: bash
+        run: grep -E "camera_desktop/windows|stream-format-test" e2e.log | tail -120 || true
