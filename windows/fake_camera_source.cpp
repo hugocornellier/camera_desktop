@@ -126,10 +126,10 @@ class FakeCameraStream
     return queue->GetEvent(flags, event);
   }
   STDMETHODIMP QueueEvent(MediaEventType type, REFGUID extended_type,
-                          HRESULT status, const PROPVARIANT* value) override {
+                          HRESULT status, const PROPVARIANT* event_value) override {
     std::lock_guard<std::mutex> lk(mu_);
     if (shutdown_) return MF_E_SHUTDOWN;
-    return queue_->QueueEventParamVar(type, extended_type, status, value);
+    return queue_->QueueEventParamVar(type, extended_type, status, event_value);
   }
 
   // IMFMediaStream
@@ -323,10 +323,10 @@ class FakeCameraSource
     return queue->GetEvent(flags, event);
   }
   STDMETHODIMP QueueEvent(MediaEventType type, REFGUID extended_type,
-                          HRESULT status, const PROPVARIANT* value) override {
+                          HRESULT status, const PROPVARIANT* event_value) override {
     std::lock_guard<std::mutex> lk(mu_);
     if (shutdown_) return MF_E_SHUTDOWN;
-    return queue_->QueueEventParamVar(type, extended_type, status, value);
+    return queue_->QueueEventParamVar(type, extended_type, status, event_value);
   }
 
   // IMFMediaSource
