@@ -1,9 +1,10 @@
 // Unit tests for windows/pixel_utils.h. The header is plain C++, so this also
-// builds on macOS/Linux. From the repo root:
-//   cl /std:c++17 /W4 /WX /EHsc /utf-8 /Iwindows \
-//     test\native\windows_pixel_utils_test.cc
-//   c++ -std=c++17 -Wall -Wextra -Werror -Iwindows \
-//     test/native/windows_pixel_utils_test.cc -o windows_pixel_utils_test
+// builds on macOS/Linux. From the repo root (CI does this in the
+// test-native-windows and test-native-linux jobs):
+//   cl /std:c++17 /W4 /WX /EHsc /utf-8 /Iwindows
+//      test/native/windows_pixel_utils_test.cc
+//   c++ -std=c++17 -Wall -Wextra -Werror -Iwindows
+//       test/native/windows_pixel_utils_test.cc -o windows_pixel_utils_test
 
 #include "pixel_utils.h"
 

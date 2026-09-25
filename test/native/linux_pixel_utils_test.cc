@@ -1,6 +1,7 @@
-// Unit tests for linux/pixel_utils.h. Build and run from the repo root:
-//   c++ -std=c++17 -Wall -Wextra -Werror -Ilinux \
-//     test/native/linux_pixel_utils_test.cc -o linux_pixel_utils_test
+// Unit tests for linux/pixel_utils.h. Build and run from the repo root
+// (CI does this in the test-native-linux job):
+//   c++ -std=c++17 -Wall -Wextra -Werror -Ilinux
+//       test/native/linux_pixel_utils_test.cc -o linux_pixel_utils_test
 //   ./linux_pixel_utils_test
 
 #include "pixel_utils.h"
