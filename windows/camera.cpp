@@ -568,6 +568,12 @@ HRESULT Camera::StartPreviewInternal() {
 
   preview_type->SetUINT32(MF_MT_ALL_SAMPLES_INDEPENDENT, TRUE);
 
+  // CopyAllItems carried over the camera-native subtype's stride, which does
+  // not describe ARGB32. Request a top-down (positive stride) layout instead.
+  preview_stride_ = static_cast<LONG>(preview_width_) * 4;
+  preview_type->SetUINT32(MF_MT_DEFAULT_STRIDE,
+                          static_cast<UINT32>(preview_stride_));
+
   // Add stream + attach sample callback.
   ComPtr<IMFCaptureEngineOnSampleCallback> sample_cb(
       new PreviewSampleCallback(weak_from_this()));
@@ -872,10 +878,12 @@ void Camera::OnPreviewSample(IMFSample* sample) {
     DebugLog("OnPreviewSample: Lock2D failed, falling back to Lock");
   }
   if (lock2d_ok) {
+    // Lock2D returns the top displayed row in scan0 and a signed pitch, so
+    // row r is always at scan0 + r * pitch, for top-down and bottom-up alike.
     const int row_bytes = cur_w * 4;
     for (int row = 0; row < cur_h; ++row) {
-      const ptrdiff_t src_off = static_cast<ptrdiff_t>(
-          (pitch < 0) ? (cur_h - 1 - row) * pitch : row * pitch);
+      const ptrdiff_t src_off =
+          static_cast<ptrdiff_t>(row) * static_cast<ptrdiff_t>(pitch);
       std::memcpy(
           packed_frame_.data() + static_cast<size_t>(row) * row_bytes,
           scan0 + src_off, static_cast<size_t>(row_bytes));
@@ -891,9 +899,26 @@ void Camera::OnPreviewSample(IMFSample* sample) {
       DebugLog("OnPreviewSample: Lock failed, dropping frame");
       return;
     }
-    if (raw_len >= packed_len) {
-      std::memcpy(packed_frame_.data(), raw, packed_len);
+    // Without IMF2DBuffer the layout comes from the media type's default
+    // stride: its magnitude is the row pitch, and a negative sign means the
+    // bottom row comes first in memory.
+    const int row_bytes = cur_w * 4;
+    const LONG stride = preview_stride_ != 0 ? preview_stride_ : row_bytes;
+    const size_t abs_stride =
+        static_cast<size_t>(stride < 0 ? -stride : stride);
+    if (abs_stride >= static_cast<size_t>(row_bytes) &&
+        raw_len >= abs_stride * static_cast<size_t>(cur_h)) {
+      for (int row = 0; row < cur_h; ++row) {
+        const size_t src_row = stride < 0
+            ? static_cast<size_t>(cur_h - 1 - row) : static_cast<size_t>(row);
+        std::memcpy(
+            packed_frame_.data() + static_cast<size_t>(row) * row_bytes,
+            raw + src_row * abs_stride, static_cast<size_t>(row_bytes));
+      }
       copied = true;
+    } else {
+      DebugLog("OnPreviewSample: Lock buffer smaller than stride * height, "
+               "dropping frame");
     }
     buffer->Unlock();
   }
@@ -909,7 +934,14 @@ void Camera::OnPreviewSample(IMFSample* sample) {
     std::memcpy(latest_frame_.data(), data, packed_len);
   }
 
-  // P7b: R↔B swap → mirrored RGBA for Flutter texture.
+  // Image stream: BGRA (the native ARGB32 byte order, matching the reported
+  // ImageFormatGroup.bgra8888), taken before the swap below. PostImageStreamFrame
+  // copies synchronously, so the in-place swap cannot race with it.
+  if (image_streaming_.load()) {
+    PostImageStreamFrame(data, cur_w, cur_h);
+  }
+
+  // Swap B and R in place: Flutter's pixel buffer texture expects RGBA.
   SwapRBChannels(data, cur_w, cur_h);
 
   // Update preview texture. Hold texture_mutex_ so an in-flight sample can't
@@ -923,11 +955,6 @@ void Camera::OnPreviewSample(IMFSample* sample) {
       texture_->Update(data, cur_w, cur_h);
       texture_registrar_->MarkTextureFrameAvailable(texture_id_);
     }
-  }
-
-  // Image stream.
-  if (image_streaming_.load()) {
-    PostImageStreamFrame(data, cur_w, cur_h);
   }
 
   // First frame: complete pending initialization.
@@ -1190,7 +1217,7 @@ void Camera::StopVideoRecording(
 }
 
 // ============================================================================
-// Image stream (unchanged logic from original)
+// Image stream
 // ============================================================================
 
 void Camera::StartImageStream() {
@@ -1198,6 +1225,9 @@ void Camera::StartImageStream() {
   std::lock_guard<std::mutex> lk(image_stream_thread_mutex_);
   if (image_stream_join_thread_.joinable()) image_stream_join_thread_.join();
   if (image_stream_thread_.joinable()) return;
+  // Fresh counter per stream session, so a task dropped by a previous session
+  // can never leave the in-flight count stuck at its cap.
+  image_stream_in_flight_ = std::make_shared<std::atomic<int>>(0);
   image_stream_running_ = true;
   image_streaming_      = true;
   image_stream_thread_  = std::thread(&Camera::ImageStreamLoop, this);
@@ -1247,13 +1277,20 @@ void Camera::PostImageStreamFrame(const uint8_t* data, int width, int height) {
         image_stream_buffer_size_ = total_size;
       }
       auto* buf     = image_stream_buffer_;
+      // Dart reads this buffer without taking the mutex. It re-checks ready
+      // and sequence after copying and drops the frame if either changed, so
+      // ready=0 must become visible before any pixel write, and every write
+      // must be visible before ready=1.
       buf->ready    = 0;
-      std::memcpy(buf->pixels, data, frame_size);
+      std::atomic_thread_fence(std::memory_order_release);
+      // Mirror so stream frames match the (mirrored) preview and photos.
+      CopyMirrored(buf->pixels, data, width, height);
       buf->width        = width;
       buf->height       = height;
       buf->bytes_per_row = width * 4;
-      buf->format       = 1;  // RGBA (post-SwapRBChannels)
+      buf->format       = 0;  // BGRA
       buf->sequence     = ++image_stream_sequence_;
+      std::atomic_thread_fence(std::memory_order_release);
       buf->ready        = 1;
       cb = image_stream_callback_;
     }
@@ -1263,7 +1300,8 @@ void Camera::PostImageStreamFrame(const uint8_t* data, int width, int height) {
     cb(camera_id_);
   } else {
     std::lock_guard<std::mutex> lk(image_stream_mutex_);
-    image_stream_slot_.data.assign(data, data + frame_size);
+    image_stream_slot_.data.resize(frame_size);
+    CopyMirrored(image_stream_slot_.data.data(), data, width, height);
     image_stream_slot_.width  = width;
     image_stream_slot_.height = height;
     image_stream_slot_.dirty  = true;
@@ -1275,6 +1313,10 @@ void Camera::ImageStreamLoop() {
   CoInitializeEx(nullptr, COINIT_MULTITHREADED);
   auto* channel = channel_;
   const int camera_id = camera_id_;
+  auto in_flight = image_stream_in_flight_;
+  // Cap on frames posted to the platform thread but not yet delivered. Beyond
+  // it frames are dropped, so a stalled UI thread cannot queue unbounded copies.
+  constexpr int kMaxInFlightFrames = 2;
 
   while (image_stream_running_.load()) {
     ImageStreamSlot local;
@@ -1288,8 +1330,12 @@ void Camera::ImageStreamLoop() {
       image_stream_slot_.dirty = false;
     }
 
+    if (in_flight->load() >= kMaxInFlightFrames) continue;
+    in_flight->fetch_add(1);
+
     platform_task_poster_(
-        [channel, camera_id, local = std::move(local)]() mutable {
+        [channel, camera_id, in_flight, local = std::move(local)]() mutable {
+          in_flight->fetch_sub(1);
           channel->InvokeMethod(
               "imageStreamFrame",
               std::make_unique<flutter::EncodableValue>(flutter::EncodableMap{
@@ -1362,6 +1408,20 @@ void Camera::FlipHorizontal(uint8_t* data, int width, int height) {
       std::memcpy(rp, tmp, 4);
       ++l;
       --r;
+    }
+  }
+}
+
+void Camera::CopyMirrored(uint8_t* dst, const uint8_t* src, int width,
+                          int height) {
+  const size_t row_bytes = static_cast<size_t>(width) * 4;
+  for (int y = 0; y < height; ++y) {
+    const uint8_t* s = src + static_cast<size_t>(y) * row_bytes;
+    uint8_t* d = dst + static_cast<size_t>(y) * row_bytes + row_bytes - 4;
+    for (int x = 0; x < width; ++x) {
+      std::memcpy(d, s, 4);
+      s += 4;
+      d -= 4;
     }
   }
 }

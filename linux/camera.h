@@ -163,6 +163,11 @@ class Camera {
 
   int64_t image_stream_sequence_ = 0;
 
+  // MethodChannel fallback frames queued on the main loop but not yet
+  // delivered. Shared with the queued callbacks so it outlives the camera.
+  std::shared_ptr<std::atomic<int>> image_stream_in_flight_ =
+      std::make_shared<std::atomic<int>>(0);
+
   // Written from the GStreamer streaming thread on first frame, read from the
   // main thread in StartVideoRecording. Must be atomic. (H-2)
   std::atomic<int> actual_width_;

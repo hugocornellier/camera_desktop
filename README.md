@@ -30,7 +30,7 @@ Add `camera_desktop` alongside `camera` in your `pubspec.yaml`:
 ```yaml
 dependencies:
   camera: ^0.11.0
-  camera_desktop: ^1.2.2
+  camera_desktop: ^1.3.0
 ```
 
 That's it. All three desktop platforms are covered, no additional packages needed.
@@ -148,7 +148,7 @@ await plugin.setMirror(cameraId, false); // disable mirror
 await plugin.setMirror(cameraId, true);  // re-enable mirror
 ```
 
-On **Windows**, the native backend does not mirror, so the example app wraps the
+On **Windows**, the native backend does not mirror, so `buildPreview()` wraps the
 preview in a horizontal `Transform` in Flutter:
 
 ```dart
@@ -164,6 +164,37 @@ if (Platform.isWindows) {
 The same applies to video playback. Recorded files from macOS/Linux are already
 mirrored, while Windows recordings need a Flutter-side flip if you want a
 mirror-style playback.
+
+Image stream frames always match the preview: they are mirrored on all three
+platforms by default, and on macOS and Linux they follow `setMirror()`.
+
+## Image Stream Format
+
+Frames from `startImageStream` use the same format on every desktop platform,
+matching `camera` on iOS and macOS:
+
+- `image.format.group` is `ImageFormatGroup.bgra8888` and `image.format.raw` is
+  `'BGRA'`.
+- There is a single plane with 4 bytes per pixel in **B, G, R, A** order.
+- Rows can be padded (macOS in particular), so always use
+  `planes[0].bytesPerRow` as the row stride rather than `width * 4`.
+- The requested `imageFormatGroup` on `CameraController` is ignored; desktop
+  streams are always BGRA.
+
+With [`package:image`](https://pub.dev/packages/image):
+
+```dart
+final plane = image.planes[0];
+final decoded = img.Image.fromBytes(
+  width: image.width,
+  height: image.height,
+  bytes: plane.bytes.buffer,
+  bytesOffset: plane.bytes.offsetInBytes,
+  rowStride: plane.bytesPerRow,
+  numChannels: 4,
+  order: img.ChannelOrder.bgra,
+);
+```
 
 ## Platform Capabilities
 

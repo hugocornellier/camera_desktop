@@ -18,7 +18,7 @@ void main() {
     setUp(() {
       channel = const MethodChannel('plugins.flutter.io/camera_desktop');
       plugin = CameraDesktopPlugin(channel: channel);
-      log.clear;
+      log.clear();
 
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, (MethodCall call) async {
@@ -333,6 +333,200 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       expect(log.last.method, 'stopImageStream');
     });
+
+    test('fallback frames are labelled BGRA and passed through unchanged, '
+        'including row padding', () async {
+      const description = CameraDescription(
+        name: 'Test Camera (/dev/video0)',
+        lensDirection: CameraLensDirection.external,
+        sensorOrientation: 0,
+      );
+      final cameraId = await plugin.createCameraWithSettings(
+        description,
+        const MediaSettings(resolutionPreset: ResolutionPreset.high),
+      );
+
+      final frames = <CameraImageData>[];
+      final subscription = plugin
+          .onStreamedFrameAvailable(cameraId)
+          .listen(frames.add);
+      await Future<void>.delayed(Duration.zero);
+
+      // 2x1 frame in BGRA order (a blue pixel, then a red one) with 4 bytes
+      // of row padding, as macOS can deliver.
+      final bytes = Uint8List.fromList(<int>[
+        255, 0, 0, 255, //
+        0, 0, 255, 255, //
+        0, 0, 0, 0,
+      ]);
+      await _sendNativeCall(
+        channel,
+        MethodCall('imageStreamFrame', <String, Object>{
+          'cameraId': cameraId,
+          'width': 2,
+          'height': 1,
+          'bytesPerRow': 12,
+          'bytes': bytes,
+        }),
+      );
+
+      expect(frames, hasLength(1));
+      final frame = frames.single;
+      expect(frame.format.group, ImageFormatGroup.bgra8888);
+      expect(frame.format.raw, 'BGRA');
+      expect(frame.width, 2);
+      expect(frame.height, 1);
+      expect(frame.planes, hasLength(1));
+      expect(frame.planes.single.bytes, bytes);
+      expect(frame.planes.single.bytesPerRow, 12);
+      expect(frame.planes.single.bytesPerPixel, 4);
+
+      await subscription.cancel();
+    });
+
+    test(
+      'fallback frames without bytesPerRow default to a tight stride',
+      () async {
+        const description = CameraDescription(
+          name: 'Test Camera (/dev/video0)',
+          lensDirection: CameraLensDirection.external,
+          sensorOrientation: 0,
+        );
+        final cameraId = await plugin.createCameraWithSettings(
+          description,
+          const MediaSettings(resolutionPreset: ResolutionPreset.high),
+        );
+
+        final frames = <CameraImageData>[];
+        final subscription = plugin
+            .onStreamedFrameAvailable(cameraId)
+            .listen(frames.add);
+        await Future<void>.delayed(Duration.zero);
+
+        await _sendNativeCall(
+          channel,
+          MethodCall('imageStreamFrame', <String, Object>{
+            'cameraId': cameraId,
+            'width': 3,
+            'height': 2,
+            'bytes': Uint8List(3 * 2 * 4),
+          }),
+        );
+
+        expect(frames.single.planes.single.bytesPerRow, 12);
+        expect(frames.single.format.raw, 'BGRA');
+
+        await subscription.cancel();
+      },
+    );
+
+    test('cancelling while startImageStream is in flight stops the stream '
+        'with its real handle and never starts a poller', () async {
+      final startCompleter = Completer<Object?>();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (MethodCall call) async {
+            log.add(call);
+            switch (call.method) {
+              case 'create':
+                return {'cameraId': 1, 'textureId': 42};
+              case 'startImageStream':
+                return startCompleter.future;
+              default:
+                return null;
+            }
+          });
+      final fake = _FakeImageStreamPoller();
+      var factoryCalls = 0;
+      plugin.imageStreamPollerFactory = (_) {
+        factoryCalls++;
+        return fake;
+      };
+
+      const description = CameraDescription(
+        name: 'Test Camera (/dev/video0)',
+        lensDirection: CameraLensDirection.external,
+        sensorOrientation: 0,
+      );
+      final cameraId = await plugin.createCameraWithSettings(
+        description,
+        const MediaSettings(resolutionPreset: ResolutionPreset.high),
+      );
+
+      final subscription = plugin
+          .onStreamedFrameAvailable(cameraId)
+          .listen((_) {});
+      await Future<void>.delayed(Duration.zero);
+      expect(log.last.method, 'startImageStream');
+
+      // Cancel before native has answered startImageStream.
+      await subscription.cancel();
+      expect(
+        log.where((c) => c.method == 'stopImageStream'),
+        isEmpty,
+        reason: 'the stop must wait for the real stream handle',
+      );
+
+      startCompleter.complete(<String, Object>{'streamHandle': 7});
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      final stops = log.where((c) => c.method == 'stopImageStream').toList();
+      expect(stops, hasLength(1));
+      expect(
+        (stops.single.arguments as Map<Object?, Object?>)['streamHandle'],
+        7,
+      );
+      expect(factoryCalls, 0, reason: 'no poller may start after cancel');
+      expect(fake.started, isFalse);
+    });
+
+    test(
+      'cancelling after the stream started stops it with its real handle',
+      () async {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, (MethodCall call) async {
+              log.add(call);
+              switch (call.method) {
+                case 'create':
+                  return {'cameraId': 1, 'textureId': 42};
+                case 'startImageStream':
+                  return <String, Object>{'streamHandle': 9};
+                default:
+                  return null;
+              }
+            });
+        final fake = _FakeImageStreamPoller();
+        plugin.imageStreamPollerFactory = (_) => fake;
+
+        const description = CameraDescription(
+          name: 'Test Camera (/dev/video0)',
+          lensDirection: CameraLensDirection.external,
+          sensorOrientation: 0,
+        );
+        final cameraId = await plugin.createCameraWithSettings(
+          description,
+          const MediaSettings(resolutionPreset: ResolutionPreset.high),
+        );
+
+        final subscription = plugin
+            .onStreamedFrameAvailable(cameraId)
+            .listen((_) {});
+        await Future<void>.delayed(Duration.zero);
+        await Future<void>.delayed(Duration.zero);
+        expect(fake.started, isTrue);
+
+        await subscription.cancel();
+
+        final stops = log.where((c) => c.method == 'stopImageStream').toList();
+        expect(stops, hasLength(1));
+        expect(
+          (stops.single.arguments as Map<Object?, Object?>)['streamHandle'],
+          9,
+        );
+        expect(fake.stopped, isTrue);
+        expect(fake.disposed, isTrue);
+      },
+    );
   });
 }
 
@@ -356,4 +550,14 @@ class _FakeImageStreamPoller implements ImageStreamPoller {
   void dispose() {
     disposed = true;
   }
+}
+
+/// Delivers [call] to the plugin as if the native side had invoked it.
+Future<void> _sendNativeCall(MethodChannel channel, MethodCall call) async {
+  await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+      .handlePlatformMessage(
+        channel.name,
+        channel.codec.encodeMethodCall(call),
+        (_) {},
+      );
 }

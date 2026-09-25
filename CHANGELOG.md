@@ -1,3 +1,13 @@
+## 1.3.0
+
+* **Behavior change:** image stream frames on Linux and Windows are now BGRA, matching their reported `ImageFormatGroup.bgra8888`, macOS, and `camera` on iOS (#9). They were previously RGBA while still reported as `bgra8888` (only `format.raw` said `'RGBA'`), so code written for iOS/macOS saw red and blue swapped. **Migration:** remove any Linux/Windows RGBA workaround (for example `ChannelOrder.rgba`, or `ChannelOrder.rgb` with `numChannels: 4`, in `package:image`) and decode every desktop platform as BGRA, using `planes[0].bytesPerRow` as the row stride.
+* **Behavior change:** Windows image stream frames are now mirrored to match the preview and saved photos, as on macOS and Linux. They were previously the only unmirrored output.
+* Fix cancelling an image stream while `startImageStream` was still in flight: the stop was sent with the camera id in place of the real stream handle (which could release another stream's handle), and the FFI poller then started anyway and polled forever.
+* Fix torn image stream frames: the FFI reader now re-checks the frame after copying and drops it if native code started overwriting the buffer mid-copy. Windows and Linux also add the missing memory fences around the shared buffer's ready flag.
+* Fix Windows frames with a bottom-up (negative) `Lock2D` pitch being read in reverse row order, and make the plain `Lock` fallback honor the preview stream's stride instead of assuming tightly packed rows. The ARGB32 preview type now requests an explicit top-down stride instead of inheriting the camera-native format's.
+* Cap MethodChannel fallback image-stream frames queued for the platform thread on Linux and Windows, so a stalled UI thread no longer accumulates unbounded frame copies.
+* Document the image stream format and mirroring in the README.
+
 ## 1.2.2
 
 * Fix macOS ignoring the requested `ResolutionPreset`: frames and the preview always arrived at the camera's native format, 1920x1080 on a MacBook Pro camera, because macOS kept the device's active format whatever the session preset. The plugin now selects the smallest native format that covers the preset, holds it through session start, and asks the output for the preset's exact size: `low` 320x240, `medium` 640x480, `high` and `veryHigh` 1280x720, `ultraHigh` and `max` 1920x1080. Apps requesting `low`, `medium` or `high` on macOS now receive smaller frames than before.
@@ -110,7 +120,7 @@ First stable release of `camera_desktop`
 
 * Live camera preview with hardware-accelerated texture rendering on all platforms
 * Photo capture, video recording, and real-time image streaming
-* FFI-based zero-copy frame delivery (MethodChannel fallback for compatibility)
+* FFI-based reduced-copy frame delivery (MethodChannel fallback for compatibility)
 * Configurable resolution presets, FPS (5-60), and video bitrate
 * Mirror/flip control (macOS and Linux)
 * Pause/resume preview

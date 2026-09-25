@@ -12,7 +12,7 @@ import 'package:flutter/foundation.dart';
 ///   int32_t width         (offset 8)
 ///   int32_t height        (offset 12)
 ///   int32_t bytes_per_row (offset 16)
-///   int32_t format        (offset 20)  -- 0=BGRA, 1=RGBA
+///   int32_t format        (offset 20)  -- 0=BGRA (all platforms), 1=RGBA
 ///   int32_t ready         (offset 24)  -- 1=Dart may read, 0=native writing
 ///   int32_t _pad          (offset 28)
 ///   uint8_t pixels[]      (offset 32)
@@ -33,7 +33,7 @@ final class ImageStreamBuffer extends Struct {
   @Int32()
   external int bytesPerRow;
 
-  /// Pixel format: 0 = BGRA (macOS), 1 = RGBA (Linux/Windows).
+  /// Pixel format: 0 = BGRA, 1 = RGBA. All native backends write BGRA.
   @Int32()
   external int format;
 
@@ -231,6 +231,10 @@ class ImageStreamFfi implements ImageStreamPoller {
   /// frames by comparing sequence numbers, creates a zero-copy view over
   /// the native pixel buffer, then copies into a Dart-owned [Uint8List]
   /// (1 copy, required by the platform interface contract).
+  ///
+  /// Native code may start overwriting the buffer while the copy is in
+  /// progress (it clears `ready` first and bumps `sequence` when done), so
+  /// both are re-checked after the copy and a torn frame is dropped.
   void _readLatestFrame() {
     final controller = _controller;
     if (controller == null || controller.isClosed) return;
@@ -241,8 +245,8 @@ class ImageStreamFfi implements ImageStreamPoller {
     final buf = bufPtr.cast<ImageStreamBuffer>().ref;
     if (buf.ready != 1) return;
 
-    if (buf.sequence <= _lastSequence) return;
-    _lastSequence = buf.sequence;
+    final sequence = buf.sequence;
+    if (sequence <= _lastSequence) return;
 
     final width = buf.width;
     final height = buf.height;
@@ -254,6 +258,9 @@ class ImageStreamFfi implements ImageStreamPoller {
     final nativeView = pixelsPtr.asTypedList(dataSize);
 
     final bytes = Uint8List.fromList(nativeView);
+
+    if (buf.ready != 1 || buf.sequence != sequence) return;
+    _lastSequence = sequence;
 
     final rawFormat = format == 0 ? 'BGRA' : 'RGBA';
 

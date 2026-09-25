@@ -134,9 +134,9 @@ class CameraDesktopPlugin extends CameraPlatform {
           final bytes = args['bytes']! as Uint8List;
           controller.add(
             CameraImageData(
-              format: CameraImageFormat(
+              format: const CameraImageFormat(
                 ImageFormatGroup.bgra8888,
-                raw: Platform.isMacOS ? 'BGRA' : 'RGBA',
+                raw: 'BGRA',
               ),
               width: width,
               height: height,
@@ -427,28 +427,51 @@ class CameraDesktopPlugin extends CameraPlatform {
     }
 
     ImageStreamPoller? ffi;
-    int streamHandle = cameraId;
+    // Null until native startImageStream returns the real handle.
+    int? streamHandle;
+    _ActiveImageStream? active;
+    var cancelled = false;
     late final StreamController<CameraImageData> controller;
+
+    Future<void> stopNativeStream(int handle) async {
+      // Wrapped defensively: the camera may have been disposed meanwhile.
+      try {
+        await _channel.invokeMethod<void>('stopImageStream', {
+          'cameraId': cameraId,
+          'streamHandle': handle,
+        });
+      } on PlatformException catch (_) {}
+    }
 
     controller = StreamController<CameraImageData>(
       onListen: () async {
         // Register the active stream up front so a concurrent dispose() can
         // find and tear it down even while startImageStream is still in flight.
-        final active = _ActiveImageStream(controller);
-        _activeImageStreams[cameraId] = active;
+        final current = _ActiveImageStream(controller);
+        active = current;
+        _activeImageStreams[cameraId] = current;
 
         final dynamic value = await _channel.invokeMethod<dynamic>(
           'startImageStream',
           {'cameraId': cameraId},
         );
-        streamHandle = extractStreamHandle(value);
+        final handle = extractStreamHandle(value);
+        streamHandle = handle;
 
         // dispose() may have run while we awaited startImageStream. If so, do
         // not start polling — the camera is already being torn down.
-        if (active.tornDown) return;
+        if (current.tornDown) return;
 
-        ffi = imageStreamPollerFactory(streamHandle);
-        active.ffi = ffi;
+        // The subscription may have been cancelled while startImageStream was
+        // in flight. onCancel left the native stop to us, since only now is
+        // the real stream handle known.
+        if (cancelled) {
+          await stopNativeStream(handle);
+          return;
+        }
+
+        ffi = imageStreamPollerFactory(handle);
+        current.ffi = ffi;
         if (ffi == null) {
           _imageStreamControllers[cameraId] = controller;
         } else {
@@ -456,27 +479,32 @@ class CameraDesktopPlugin extends CameraPlatform {
         }
       },
       onCancel: () async {
-        final active = _activeImageStreams.remove(cameraId);
+        cancelled = true;
+        final current = active;
+        if (current != null &&
+            identical(_activeImageStreams[cameraId], current)) {
+          _activeImageStreams.remove(cameraId);
+        }
         // If dispose() already took over teardown, it owns the native stop and
         // FFI cleanup. Just ensure the local poller is stopped and bail, so we
         // never call stopImageStream on an already-disposed camera.
-        if (active == null || active.tornDown) {
+        if (current == null || current.tornDown) {
           ffi?.stop();
           ffi?.dispose();
           return;
         }
 
+        // startImageStream is still in flight: onListen sends the stop once
+        // it has the real handle, and never starts a poller.
+        final handle = streamHandle;
+        if (handle == null) return;
+
         // Unregister the native callback first so no new frames are dispatched.
         ffi?.stop();
-        _imageStreamControllers.remove(cameraId);
-        // Tell native to stop streaming. Wrapped defensively: the camera may
-        // have been disposed between the check above and this call.
-        try {
-          await _channel.invokeMethod<void>('stopImageStream', {
-            'cameraId': cameraId,
-            'streamHandle': streamHandle,
-          });
-        } on PlatformException catch (_) {}
+        if (identical(_imageStreamControllers[cameraId], controller)) {
+          _imageStreamControllers.remove(cameraId);
+        }
+        await stopNativeStream(handle);
         // Native has stopped, safe to release FFI resources.
         ffi?.dispose();
       },
