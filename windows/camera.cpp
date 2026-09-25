@@ -12,6 +12,7 @@
 
 #include "logging.h"
 #include "photo_handler.h"
+#include "pixel_utils.h"
 
 // ============================================================================
 // COM callbacks
@@ -878,16 +879,8 @@ void Camera::OnPreviewSample(IMFSample* sample) {
     DebugLog("OnPreviewSample: Lock2D failed, falling back to Lock");
   }
   if (lock2d_ok) {
-    // Lock2D returns the top displayed row in scan0 and a signed pitch, so
-    // row r is always at scan0 + r * pitch, for top-down and bottom-up alike.
-    const int row_bytes = cur_w * 4;
-    for (int row = 0; row < cur_h; ++row) {
-      const ptrdiff_t src_off =
-          static_cast<ptrdiff_t>(row) * static_cast<ptrdiff_t>(pitch);
-      std::memcpy(
-          packed_frame_.data() + static_cast<size_t>(row) * row_bytes,
-          scan0 + src_off, static_cast<size_t>(row_bytes));
-    }
+    pixel_utils::PackRowsFromScan0(packed_frame_.data(), scan0, pitch, cur_w,
+                                   cur_h);
     buffer2d->Unlock2D();
     copied = true;
   }
@@ -900,23 +893,11 @@ void Camera::OnPreviewSample(IMFSample* sample) {
       return;
     }
     // Without IMF2DBuffer the layout comes from the media type's default
-    // stride: its magnitude is the row pitch, and a negative sign means the
-    // bottom row comes first in memory.
-    const int row_bytes = cur_w * 4;
-    const LONG stride = preview_stride_ != 0 ? preview_stride_ : row_bytes;
-    const size_t abs_stride =
-        static_cast<size_t>(stride < 0 ? -stride : stride);
-    if (abs_stride >= static_cast<size_t>(row_bytes) &&
-        raw_len >= abs_stride * static_cast<size_t>(cur_h)) {
-      for (int row = 0; row < cur_h; ++row) {
-        const size_t src_row = stride < 0
-            ? static_cast<size_t>(cur_h - 1 - row) : static_cast<size_t>(row);
-        std::memcpy(
-            packed_frame_.data() + static_cast<size_t>(row) * row_bytes,
-            raw + src_row * abs_stride, static_cast<size_t>(row_bytes));
-      }
-      copied = true;
-    } else {
+    // stride requested in StartPreviewInternal.
+    const LONG stride = preview_stride_ != 0 ? preview_stride_ : cur_w * 4;
+    copied = pixel_utils::PackRowsFromContiguous(
+        packed_frame_.data(), raw, raw_len, stride, cur_w, cur_h);
+    if (!copied) {
       DebugLog("OnPreviewSample: Lock buffer smaller than stride * height, "
                "dropping frame");
     }
@@ -934,15 +915,13 @@ void Camera::OnPreviewSample(IMFSample* sample) {
     std::memcpy(latest_frame_.data(), data, packed_len);
   }
 
-  // Image stream: BGRA (the native ARGB32 byte order, matching the reported
-  // ImageFormatGroup.bgra8888), taken before the swap below. PostImageStreamFrame
-  // copies synchronously, so the in-place swap cannot race with it.
-  if (image_streaming_.load()) {
-    PostImageStreamFrame(data, cur_w, cur_h);
-  }
-
-  // Swap B and R in place: Flutter's pixel buffer texture expects RGBA.
-  SwapRBChannels(data, cur_w, cur_h);
+  // Image stream gets the native ARGB32 bytes (BGRA in memory, matching the
+  // reported ImageFormatGroup.bgra8888); the frame is then swapped in place to
+  // the RGBA that Flutter's pixel buffer texture expects. PostImageStreamFrame
+  // copies synchronously, so the swap cannot race with it.
+  pixel_utils::EmitStreamFrameThenSwapToRgba(
+      data, cur_w, cur_h, image_streaming_.load(),
+      [&](const uint8_t* bgra) { PostImageStreamFrame(bgra, cur_w, cur_h); });
 
   // Update preview texture. Hold texture_mutex_ so an in-flight sample can't
   // deref a texture_ that DisposeInternal is freeing concurrently (see CRASH.md).
@@ -1075,7 +1054,7 @@ void Camera::TakePicture(
         async_result(raw_result);
 
     // Keep saved stills mirror-consistent with the preview UI.
-    FlipHorizontal(frame_copy.data(), width, height);
+    pixel_utils::FlipHorizontal(frame_copy.data(), width, height);
 
     std::wstring path = PhotoHandler::GeneratePath(camera_id);
     DebugLog("TakePicture: writing to " + WstrToUtf8(path));
@@ -1283,8 +1262,7 @@ void Camera::PostImageStreamFrame(const uint8_t* data, int width, int height) {
       // must be visible before ready=1.
       buf->ready    = 0;
       std::atomic_thread_fence(std::memory_order_release);
-      // Mirror so stream frames match the (mirrored) preview and photos.
-      CopyMirrored(buf->pixels, data, width, height);
+      std::memcpy(buf->pixels, data, frame_size);
       buf->width        = width;
       buf->height       = height;
       buf->bytes_per_row = width * 4;
@@ -1300,8 +1278,7 @@ void Camera::PostImageStreamFrame(const uint8_t* data, int width, int height) {
     cb(camera_id_);
   } else {
     std::lock_guard<std::mutex> lk(image_stream_mutex_);
-    image_stream_slot_.data.resize(frame_size);
-    CopyMirrored(image_stream_slot_.data.data(), data, width, height);
+    image_stream_slot_.data.assign(data, data + frame_size);
     image_stream_slot_.width  = width;
     image_stream_slot_.height = height;
     image_stream_slot_.dirty  = true;
@@ -1389,48 +1366,6 @@ void Camera::SendError(const std::string& description) {
              flutter::EncodableValue(description)},
         }));
   }, "cameraError");
-}
-
-// ============================================================================
-// Pixel helpers
-// ============================================================================
-
-void Camera::FlipHorizontal(uint8_t* data, int width, int height) {
-  for (int y = 0; y < height; ++y) {
-    uint8_t* row = data + static_cast<size_t>(y) * width * 4;
-    int l = 0, r = width - 1;
-    while (l < r) {
-      uint8_t* lp = row + l * 4;
-      uint8_t* rp = row + r * 4;
-      uint8_t tmp[4];
-      std::memcpy(tmp, lp, 4);
-      std::memcpy(lp, rp, 4);
-      std::memcpy(rp, tmp, 4);
-      ++l;
-      --r;
-    }
-  }
-}
-
-void Camera::CopyMirrored(uint8_t* dst, const uint8_t* src, int width,
-                          int height) {
-  const size_t row_bytes = static_cast<size_t>(width) * 4;
-  for (int y = 0; y < height; ++y) {
-    const uint8_t* s = src + static_cast<size_t>(y) * row_bytes;
-    uint8_t* d = dst + static_cast<size_t>(y) * row_bytes + row_bytes - 4;
-    for (int x = 0; x < width; ++x) {
-      std::memcpy(d, s, 4);
-      s += 4;
-      d -= 4;
-    }
-  }
-}
-
-void Camera::SwapRBChannels(uint8_t* data, int width, int height) {
-  const size_t n = static_cast<size_t>(width) * height;
-  for (size_t i = 0; i < n; ++i) {
-    std::swap(data[i * 4 + 0], data[i * 4 + 2]);  // B ↔ R
-  }
 }
 
 // ============================================================================

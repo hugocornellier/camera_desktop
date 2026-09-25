@@ -1,12 +1,12 @@
-## 1.3.0
+## 2.0.0
 
-* **Behavior change:** image stream frames on Linux and Windows are now BGRA, matching their reported `ImageFormatGroup.bgra8888`, macOS, and `camera` on iOS (#9). They were previously RGBA while still reported as `bgra8888` (only `format.raw` said `'RGBA'`), so code written for iOS/macOS saw red and blue swapped. **Migration:** remove any Linux/Windows RGBA workaround (for example `ChannelOrder.rgba`, or `ChannelOrder.rgb` with `numChannels: 4`, in `package:image`) and decode every desktop platform as BGRA, using `planes[0].bytesPerRow` as the row stride.
-* **Behavior change:** Windows image stream frames are now mirrored to match the preview and saved photos, as on macOS and Linux. They were previously the only unmirrored output.
+* **Breaking:** image stream frames on Linux and Windows are now BGRA, matching their reported `ImageFormatGroup.bgra8888`, macOS, and `camera` on iOS (#9). They were previously RGBA while still reported as `bgra8888` (only `format.raw` said `'RGBA'`), so code written for iOS/macOS saw red and blue swapped. **Migration:** remove any Linux/Windows RGBA workaround, such as choosing BGRA only when `Platform.isMacOS`, or `ChannelOrder.rgba` / `ChannelOrder.rgb` with `numChannels: 4` in `package:image`. Decode every desktop platform as BGRA (or, to support both 1.x and 2.x, treat the frame as RGBA only when `format.raw == 'RGBA'`), using `planes[0].bytesPerRow` as the row stride.
 * Fix cancelling an image stream while `startImageStream` was still in flight: the stop was sent with the camera id in place of the real stream handle (which could release another stream's handle), and the FFI poller then started anyway and polled forever.
 * Fix torn image stream frames: the FFI reader now re-checks the frame after copying and drops it if native code started overwriting the buffer mid-copy. Windows and Linux also add the missing memory fences around the shared buffer's ready flag.
 * Fix Windows frames with a bottom-up (negative) `Lock2D` pitch being read in reverse row order, and make the plain `Lock` fallback honor the preview stream's stride instead of assuming tightly packed rows. The ARGB32 preview type now requests an explicit top-down stride instead of inheriting the camera-native format's.
 * Cap MethodChannel fallback image-stream frames queued for the platform thread on Linux and Windows, so a stalled UI thread no longer accumulates unbounded frame copies.
 * Document the image stream format and mirroring in the README.
+* Add native pixel-helper unit tests (Linux and Windows) and a Linux CI job that streams from a v4l2loopback virtual camera and checks the bytes are really BGRA.
 
 ## 1.2.2
 

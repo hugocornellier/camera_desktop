@@ -1,5 +1,6 @@
 #include "camera.h"
 #include "photo_handler.h"
+#include "pixel_utils.h"
 
 #include <gio/gio.h>
 #include <gst/video/video.h>
@@ -14,26 +15,6 @@ static const guint kInitTimeoutMs = 8000;
 // delivered. Beyond it frames are dropped, so a stalled main thread cannot
 // accumulate unbounded frame copies.
 static const int kMaxInFlightStreamFrames = 2;
-
-// Copies an RGBA frame (source rows |src_stride| bytes apart) into a tightly
-// packed BGRA buffer. Image stream frames are reported as
-// ImageFormatGroup.bgra8888, matching camera_avfoundation, while the pipeline
-// itself stays RGBA for the Flutter texture and the recording branch.
-static void CopyRgbaToBgra(uint8_t* dst, const uint8_t* src, int width,
-                           int height, int src_stride) {
-  for (int row = 0; row < height; row++) {
-    const uint8_t* s = src + (size_t)row * src_stride;
-    uint8_t* d = dst + (size_t)row * width * 4;
-    for (int x = 0; x < width; x++) {
-      d[0] = s[2];
-      d[1] = s[1];
-      d[2] = s[0];
-      d[3] = s[3];
-      s += 4;
-      d += 4;
-    }
-  }
-}
 
 Camera::Camera(int camera_id,
                FlTextureRegistrar* texture_registrar,
@@ -373,7 +354,7 @@ GstFlowReturn Camera::OnNewSample(GstAppSink* sink, gpointer user_data) {
       buf->ready = 0;
       std::atomic_thread_fence(std::memory_order_release);
 
-      CopyRgbaToBgra(buf->pixels, map.data, width, height, stride);
+      pixel_utils::CopyRgbaToBgra(buf->pixels, map.data, width, height, stride);
 
       buf->width = width;
       buf->height = height;
@@ -392,7 +373,7 @@ GstFlowReturn Camera::OnNewSample(GstAppSink* sink, gpointer user_data) {
       // Legacy MethodChannel fallback path.
       size_t frame_size = (size_t)width * height * 4;
       uint8_t* frame_copy = (uint8_t*)g_malloc(frame_size);
-      CopyRgbaToBgra(frame_copy, map.data, width, height, stride);
+      pixel_utils::CopyRgbaToBgra(frame_copy, map.data, width, height, stride);
 
       struct ImageStreamData {
         std::shared_ptr<std::atomic<int>> in_flight;

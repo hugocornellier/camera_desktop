@@ -102,13 +102,6 @@ class Camera : public std::enable_shared_from_this<Camera> {
   void SendError(const std::string& description);
   int  InitElapsedMs() const;
 
-  static void FlipHorizontal(uint8_t* data, int width, int height);
-  static void SwapRBChannels(uint8_t* data, int width, int height);
-  // Copies a tightly packed 4-byte-per-pixel frame into |dst|, mirroring each
-  // row horizontally. |dst| and |src| must not overlap.
-  static void CopyMirrored(uint8_t* dst, const uint8_t* src, int width,
-                           int height);
-
   void PostImageStreamFrame(const uint8_t* data, int width, int height);
   void ImageStreamLoop();
 

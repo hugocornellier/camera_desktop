@@ -30,7 +30,7 @@ Add `camera_desktop` alongside `camera` in your `pubspec.yaml`:
 ```yaml
 dependencies:
   camera: ^0.11.0
-  camera_desktop: ^1.3.0
+  camera_desktop: ^2.0.0
 ```
 
 That's it. All three desktop platforms are covered, no additional packages needed.
@@ -165,8 +165,10 @@ The same applies to video playback. Recorded files from macOS/Linux are already
 mirrored, while Windows recordings need a Flutter-side flip if you want a
 mirror-style playback.
 
-Image stream frames always match the preview: they are mirrored on all three
-platforms by default, and on macOS and Linux they follow `setMirror()`.
+Image stream frames on macOS and Linux come from the same mirrored capture as
+the preview and follow `setMirror()`. On Windows the mirroring is applied only
+to the preview widget, so stream frames are **not** mirrored: flip any overlay
+you draw from stream coordinates on top of the Windows preview.
 
 ## Image Stream Format
 
