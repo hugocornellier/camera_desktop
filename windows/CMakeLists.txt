@@ -24,6 +24,15 @@ set_target_properties(${PLUGIN_NAME} PROPERTIES
 
 target_compile_definitions(${PLUGIN_NAME} PRIVATE FLUTTER_PLUGIN_IMPL)
 
+# TEST ONLY: a fake camera producing solid red frames, so CI machines without
+# a webcam can run the real capture pipeline end to end. Compiled in only when
+# the build environment sets CAMERA_DESKTOP_FAKE_CAMERA; release builds never
+# contain it. See fake_camera_source.h.
+if(DEFINED ENV{CAMERA_DESKTOP_FAKE_CAMERA})
+  target_sources(${PLUGIN_NAME} PRIVATE fake_camera_source.cpp)
+  target_compile_definitions(${PLUGIN_NAME} PRIVATE CAMERA_DESKTOP_FAKE_CAMERA)
+endif()
+
 if(MSVC)
   # Force MSVC to read source (and emit narrow string literals) as UTF-8,
   # regardless of the host's ANSI code page. Without this, hosts with a

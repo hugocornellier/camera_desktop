@@ -102,9 +102,6 @@ class Camera : public std::enable_shared_from_this<Camera> {
   void SendError(const std::string& description);
   int  InitElapsedMs() const;
 
-  static void FlipHorizontal(uint8_t* data, int width, int height);
-  static void SwapRBChannels(uint8_t* data, int width, int height);
-
   void PostImageStreamFrame(const uint8_t* data, int width, int height);
   void ImageStreamLoop();
 
@@ -134,6 +131,9 @@ class Camera : public std::enable_shared_from_this<Camera> {
   ComPtr<IMFMediaType> base_capture_media_type_;
   int preview_width_  = 0;
   int preview_height_ = 0;
+  // Signed default stride requested for the ARGB32 preview stream (negative
+  // means bottom-up). Used when a sample buffer exposes no IMF2DBuffer.
+  LONG preview_stride_ = 0;
   int record_width_   = 0;
   int record_height_  = 0;
   int record_fps_     = 0;
@@ -209,6 +209,10 @@ class Camera : public std::enable_shared_from_this<Camera> {
   std::atomic<bool>       image_stream_running_{false};
   std::thread             image_stream_join_thread_;
   std::mutex              image_stream_thread_mutex_;
+  // MethodChannel fallback frames posted to the platform thread but not yet
+  // delivered. Shared with the posted tasks so it outlives the camera.
+  std::shared_ptr<std::atomic<int>> image_stream_in_flight_ =
+      std::make_shared<std::atomic<int>>(0);
 
   // ── Async dispose ───────────────────────────────────────────────────────
   std::thread                         dispose_thread_;

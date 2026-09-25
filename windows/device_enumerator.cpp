@@ -8,6 +8,7 @@
 #include <locale>
 #include <string>
 
+#include "fake_camera_source.h"
 #include "logging.h"
 
 using Microsoft::WRL::ComPtr;
@@ -33,6 +34,10 @@ static std::wstring Utf8ToWide(const std::string& s) {
 std::vector<DeviceInfo> DeviceEnumerator::EnumerateVideoDevices() {
   DebugLog("DeviceEnumerator::EnumerateVideoDevices start");
   std::vector<DeviceInfo> result;
+
+#ifdef CAMERA_DESKTOP_FAKE_CAMERA
+  result.push_back({kFakeCameraFriendlyName, kFakeCameraSymbolicLink});
+#endif
 
   ComPtr<IMFAttributes> attrs;
   if (FAILED(MFCreateAttributes(&attrs, 1))) {

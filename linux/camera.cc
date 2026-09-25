@@ -1,5 +1,6 @@
 #include "camera.h"
 #include "photo_handler.h"
+#include "pixel_utils.h"
 
 #include <gio/gio.h>
 #include <gst/video/video.h>
@@ -9,6 +10,11 @@
 #include <cstring>
 
 static const guint kInitTimeoutMs = 8000;
+
+// Cap on MethodChannel fallback frames queued on the main loop but not yet
+// delivered. Beyond it frames are dropped, so a stalled main thread cannot
+// accumulate unbounded frame copies.
+static const int kMaxInFlightStreamFrames = 2;
 
 Camera::Camera(int camera_id,
                FlTextureRegistrar* texture_registrar,
@@ -343,21 +349,17 @@ GstFlowReturn Camera::OnNewSample(GstAppSink* sink, gpointer user_data) {
       }
 
       auto* buf = self->image_stream_buffer_;
+      // Dart re-checks ready and sequence after copying and drops the frame
+      // if either changed, so ready=0 must be visible before any pixel write.
       buf->ready = 0;
+      std::atomic_thread_fence(std::memory_order_release);
 
-      if (stride == width * 4) {
-        memcpy(buf->pixels, map.data, frame_size);
-      } else {
-        for (int row = 0; row < height; row++) {
-          memcpy(buf->pixels + row * width * 4, map.data + row * stride,
-                 width * 4);
-        }
-      }
+      pixel_utils::CopyRgbaToBgra(buf->pixels, map.data, width, height, stride);
 
       buf->width = width;
       buf->height = height;
       buf->bytes_per_row = width * 4;
-      buf->format = 1;  // RGBA (Linux GStreamer pipeline)
+      buf->format = 0;  // BGRA
       buf->sequence = ++self->image_stream_sequence_;
 
       // C-5: release fence, guarantees all pixel and metadata writes above
@@ -366,20 +368,15 @@ GstFlowReturn Camera::OnNewSample(GstAppSink* sink, gpointer user_data) {
       buf->ready = 1;
 
       cb(self->camera_id_);
-    } else {
+    } else if (self->image_stream_in_flight_->load() <
+               kMaxInFlightStreamFrames) {
       // Legacy MethodChannel fallback path.
       size_t frame_size = (size_t)width * height * 4;
       uint8_t* frame_copy = (uint8_t*)g_malloc(frame_size);
-      if (stride == width * 4) {
-        memcpy(frame_copy, map.data, frame_size);
-      } else {
-        for (int row = 0; row < height; row++) {
-          memcpy(frame_copy + row * width * 4, map.data + row * stride,
-                 width * 4);
-        }
-      }
+      pixel_utils::CopyRgbaToBgra(frame_copy, map.data, width, height, stride);
 
       struct ImageStreamData {
+        std::shared_ptr<std::atomic<int>> in_flight;
         FlMethodChannel* channel;
         int camera_id;
         uint8_t* pixels;
@@ -388,7 +385,9 @@ GstFlowReturn Camera::OnNewSample(GstAppSink* sink, gpointer user_data) {
         size_t size;
       };
 
+      self->image_stream_in_flight_->fetch_add(1);
       auto* stream_data = new ImageStreamData();
+      stream_data->in_flight = self->image_stream_in_flight_;
       stream_data->channel = self->method_channel_;
       stream_data->camera_id = self->camera_id_;
       stream_data->pixels = frame_copy;
@@ -399,6 +398,7 @@ GstFlowReturn Camera::OnNewSample(GstAppSink* sink, gpointer user_data) {
       g_idle_add(
           [](gpointer user_data) -> gboolean {
             auto* data = static_cast<ImageStreamData*>(user_data);
+            data->in_flight->fetch_sub(1);
 
             g_autoptr(FlValue) args = fl_value_new_map();
             fl_value_set_string_take(args, "cameraId",
