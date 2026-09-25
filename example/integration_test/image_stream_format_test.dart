@@ -76,10 +76,7 @@ void main() {
 
       final frame = frames.last;
       final plane = frame.planes.single;
-      expect(frame.format.group, ImageFormatGroup.bgra8888);
-      expect(frame.format.raw, 'BGRA');
-      expect(plane.bytesPerPixel, 4);
-      expect(plane.bytesPerRow, greaterThanOrEqualTo(frame.width * 4));
+
       expect(
         plane.bytes.length,
         greaterThanOrEqualTo(
@@ -105,8 +102,14 @@ void main() {
       print(
         '[stream-format-test] $path ${frame.width}x${frame.height} '
         'bytesPerRow=${plane.bytesPerRow} centre byte means '
-        '[b0,b1,b2,b3]=$mean',
+        '[b0,b1,b2,b3]=$mean '
+        'group=${frame.format.group.name} raw=${frame.format.raw}',
       );
+
+      expect(frame.format.group, ImageFormatGroup.bgra8888);
+      expect(frame.format.raw, 'BGRA');
+      expect(plane.bytesPerPixel, 4);
+      expect(plane.bytesPerRow, greaterThanOrEqualTo(frame.width * 4));
 
       if (_expectRedCamera) {
         expect(mean[0], lessThan(60), reason: 'byte 0 must be blue (low)');
