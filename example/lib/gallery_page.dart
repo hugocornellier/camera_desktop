@@ -1,5 +1,7 @@
 import 'dart:io';
 
+// material.dart is deprecated from Flutter 3.50 (package:material_ui replaces it).
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 
 import 'photo_viewer_page.dart';
