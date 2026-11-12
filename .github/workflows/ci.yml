@@ -201,6 +201,11 @@ jobs:
       - name: Install Linux dependencies and v4l2loopback
         run: |
           sudo apt-get update
+          # videodev ships in linux-modules-extra on older kernels, and in
+          # linux-modules (already installed) on the 7.0 azure kernels, which
+          # have no -extra package.
+          extra="linux-modules-extra-$(uname -r)"
+          apt-cache show "$extra" > /dev/null 2>&1 || extra=""
           sudo apt-get install -y \
             clang cmake ninja-build pkg-config \
             libgtk-3-dev \
@@ -212,7 +217,7 @@ jobs:
             libmpv-dev \
             xvfb v4l-utils \
             "linux-headers-$(uname -r)" \
-            "linux-modules-extra-$(uname -r)" \
+            $extra \
             v4l2loopback-dkms
       - name: Create a virtual camera
         run: |
